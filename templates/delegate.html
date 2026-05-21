@@ -182,7 +182,10 @@
                     const item = document.createElement('div');
                     item.className = 'source-item';
                     const kindTag = s.kind === 'guideline' ? 'Guideline' : 'Regulation';
-                    item.innerHTML = `<div class="source-head"><a href="${s.url}" target="_blank" rel="noopener">[${s.regulation_id}]</a> <span class="source-kind source-${s.kind}">${kindTag}</span> <span class="source-article">Article ${escapeHtml(String(s.article_num || ''))}: ${escapeHtml(s.article_title || '')}</span></div><div class="source-body">${escapeHtml(s.content)}</div>`;
+                    const safeUrl = escapeHtml(String(s.url || ''));
+                    const safeId = escapeHtml(String(s.regulation_id || ''));
+                    const safeKind = s.kind === 'guideline' ? 'guideline' : 'regulation';
+                    item.innerHTML = `<div class="source-head"><a href="${safeUrl}" target="_blank" rel="noopener">[${safeId}]</a> <span class="source-kind source-${safeKind}">${kindTag}</span> <span class="source-article">Article ${escapeHtml(String(s.article_num || ''))}: ${escapeHtml(s.article_title || '')}</span></div><div class="source-body">${escapeHtml(s.content)}</div>`;
                     det.appendChild(item);
                 }
                 chat.appendChild(det);

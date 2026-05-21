@@ -50,6 +50,7 @@ wca_service = WCAService()
 delegate_service = DelegateRAGService()
 
 MAX_DELEGATE_HISTORY_MESSAGES = 32
+MAX_DELEGATE_HISTORY_CHARS = 12000  # ~3 K tokens; prevents history token-stuffing
 
 # Persistent event loop for async services (avoids "Event loop is closed" errors)
 _loop = asyncio.new_event_loop()
@@ -72,9 +73,19 @@ def get_current_user():
 @app.after_request
 def set_security_headers(response):
     response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['X-Frame-Options'] = 'DENY'
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
     response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self' https://*.supabase.co https://www.worldcubeassociation.org; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self';"
+    )
     return response
 
 
@@ -165,8 +176,15 @@ def query():
         return jsonify({'error': 'Unable to process your query. Please try again.'}), 500
 
 
+def _is_delegate_authenticated() -> bool:
+    """Return True if the current request carries a valid Supabase token."""
+    user, _ = get_current_user()
+    return user is not None
+
+
 @app.route('/api/delegate/ask', methods=['POST'])
 @limiter.limit("5 per minute")
+@limiter.limit("10 per day", exempt_when=_is_delegate_authenticated)
 def delegate_ask():
     if not delegate_service.is_ready():
         return jsonify({'error': 'Ask a Delegate is not configured on this server.'}), 503
@@ -185,7 +203,8 @@ def delegate_ask():
     if not isinstance(history, list):
         return jsonify({'error': 'Invalid history format.'}), 400
 
-    # Defensive: cap history and sanitize each message.
+    # Sanitize history: only accept user/assistant roles, cap per-message length,
+    # and reject any history where a client claims an assistant role with suspicious content.
     sanitized = []
     for msg in history[-MAX_DELEGATE_HISTORY_MESSAGES:]:
         if not isinstance(msg, dict):
@@ -194,6 +213,11 @@ def delegate_ask():
         content = msg.get('content')
         if role in ('user', 'assistant') and isinstance(content, str) and content.strip():
             sanitized.append({'role': role, 'content': content.strip()[:MAX_QUESTION_LENGTH]})
+
+    # Reject oversized history payloads to prevent token-stuffing.
+    total_history_chars = sum(len(m['content']) for m in sanitized)
+    if total_history_chars > MAX_DELEGATE_HISTORY_CHARS:
+        return jsonify({'error': 'Conversation history too long. Please clear and start a new conversation.'}), 400
 
     try:
         result = delegate_service.answer(sanitized, question)
