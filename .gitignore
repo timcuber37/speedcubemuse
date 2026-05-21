@@ -60,6 +60,9 @@ wca_data.sql
 # CSV exports
 csv_export/
 
+# Database update state
+scripts/.last_export_date
+
 # Export/setup scripts (not needed in production)
 export_csv.py
 check_schema.py

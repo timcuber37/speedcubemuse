@@ -128,7 +128,7 @@ class WCAService:
             processed_row = {}
             for key, value in row.items():
                 # Format time results (WCA stores times in centiseconds)
-                if key in ['best', 'average', 'value1', 'value2', 'value3', 'value4', 'value5', 'worldRecord', 'continentalRecord', 'nationalRecord']:
+                if key in ['best', 'average', 'value']:
                     if isinstance(value, int) and value > 0:
                         processed_row[key] = self._format_time(value)
                     elif value == -1:

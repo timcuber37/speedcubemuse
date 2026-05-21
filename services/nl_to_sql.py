@@ -39,7 +39,10 @@ Columns: wca_id (varchar), sub_id (int), name (varchar), country_id (varchar), g
 Columns: id (varchar), name (varchar), city_name (varchar), country_id (varchar), information (text), year (int), month (int), day (int), end_year (int), end_month (int), end_day (int), cancelled (int), event_specs (text), delegates (text), organizers (text), venue (varchar), venue_address (varchar), venue_details (varchar), external_website (varchar), cell_name (varchar), latitude_microdegrees (int), longitude_microdegrees (int)
 
 **events** - Puzzle event information
-Columns: id (varchar), name (varchar), rank (int), format (varchar), cell_name (varchar)
+Columns: id (varchar), name (varchar), rank (int), format (varchar)
+
+**result_attempts** - Individual attempt values for each result (replaces value1-5 columns)
+Columns: result_id (bigint, FK → results.id), attempt_number (tinyint), value (int, centiseconds; -1=DNF, -2=DNS, 0=no result)
 
 **countries** - Country information
 Columns: id (varchar), name (varchar), continent_id (varchar), iso2 (varchar)
@@ -65,9 +68,11 @@ Common event IDs:
 
 IMPORTANT NOTES:
 - Time values are stored in centiseconds (1/100th of a second). Example: 1000 = 10.00 seconds, 6000 = 1:00.00
-- -1 means DNF (Did Not Finish), -2 means DNS (Did Not Start)
+- -1 means DNF (Did Not Finish), -2 means DNS (Did Not Start), 0 means no result
 - The 'best' column in ranks_single and ranks_average contains the person's best time
 - World rank 1 means world record holder
+- Individual solve attempt values are in result_attempts, NOT in the results table. Join on result_attempts.result_id = results.id
+- For questions about overall best/average in a round, use the results table. For individual attempt values, join result_attempts
 
 EXAMPLE QUERIES:
 
@@ -104,6 +109,13 @@ FROM results
 GROUP BY person_id, person_name
 ORDER BY result_count DESC
 LIMIT 10
+
+All individual attempts for a specific result (using result_attempts):
+SELECT r.person_name, r.competition_id, ra.attempt_number, ra.value
+FROM results r
+JOIN result_attempts ra ON ra.result_id = r.id
+WHERE r.event_id = '333' AND r.person_id = 'WCAID'
+ORDER BY ra.attempt_number
 """
     
     async def translate_to_sql(self, question: str) -> str:
