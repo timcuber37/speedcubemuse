@@ -242,6 +242,74 @@ def run(force: bool = False) -> None:
     STATE_FILE.write_text(export_date)
     log.info("Database updated to export date: %s", export_date)
 
+    # Query stats and update about.html
+    print_and_update_stats(export_date)
+
+
+def print_and_update_stats(export_date: str) -> None:
+    """Query row counts from TiDB and patch the stats in about.html."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        stats = {}
+        for table, label in [
+            ('persons',      'Competitors'),
+            ('results',      'Results'),
+            ('competitions', 'Competitions'),
+            ('events',       'Events'),
+        ]:
+            cur.execute(f'SELECT COUNT(*) FROM `{table}`')
+            stats[label] = cur.fetchone()[0]
+        cur.close()
+    finally:
+        conn.close()
+
+    print('\n' + '=' * 40)
+    print('  Database stats')
+    print('=' * 40)
+    for label, count in stats.items():
+        print(f'  {label:<15} {count:>10,}')
+    print('=' * 40 + '\n')
+
+    _patch_about_html(stats, export_date)
+
+
+def _patch_about_html(stats: dict, export_date: str) -> None:
+    """Update the stat numbers and export date in templates/about.html."""
+    about_path = _HERE.parent / 'templates' / 'about.html'
+    if not about_path.exists():
+        log.warning("about.html not found at %s — skipping auto-update", about_path)
+        return
+
+    html = about_path.read_text(encoding='utf-8')
+
+    # Update each stat-card number by matching on its label
+    for label, count in stats.items():
+        html = re.sub(
+            r'(<span class="stat-number">)[^<]*(</span>\s*<span class="stat-label">'
+            + re.escape(label) + r'</span>)',
+            rf'\g<1>{count:,}\g<2>',
+            html,
+        )
+
+    # Update the export date in the Database section description
+    # Matches e.g. "(March 14, 2026)" or "(May 21, 2026)"
+    from datetime import datetime
+    try:
+        dt = datetime.strptime(export_date, '%Y-%m-%d')
+        formatted_date = dt.strftime('%B') + ' ' + str(dt.day) + ', ' + str(dt.year)
+    except Exception:
+        formatted_date = export_date
+
+    html = re.sub(
+        r'(WCA data export\s*\()[^)]+(\))',
+        rf'\g<1>{formatted_date}\g<2>',
+        html,
+    )
+
+    about_path.write_text(html, encoding='utf-8')
+    log.info("about.html updated with latest stats and export date: %s", formatted_date)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Update TiDB with latest WCA data export')
