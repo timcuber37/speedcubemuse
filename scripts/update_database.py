@@ -252,13 +252,13 @@ def print_and_update_stats(export_date: str) -> None:
     try:
         cur = conn.cursor()
         stats = {}
-        for table, label in [
-            ('persons',      'Competitors'),
-            ('results',      'Results'),
-            ('competitions', 'Competitions'),
-            ('events',       'Events'),
+        for sql, label in [
+            ('SELECT COUNT(*) FROM `persons`',                    'Competitors'),
+            ('SELECT COUNT(*) FROM `results`',                    'Results'),
+            ('SELECT COUNT(*) FROM `competitions`',               'Competitions'),
+            ('SELECT COUNT(*) FROM `events` WHERE `rank` < 900',  'Events'),
         ]:
-            cur.execute(f'SELECT COUNT(*) FROM `{table}`')
+            cur.execute(sql)
             stats[label] = cur.fetchone()[0]
         cur.close()
     finally:
