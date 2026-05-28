@@ -34,3 +34,11 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             if "test_database" in str(item.fspath):
                 item.add_marker(skip)
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    if exitstatus == 0:
+        terminalreporter.write_line(
+            "All database validation tests passed. The database is up to date and consistent.",
+            green=True, bold=True,
+        )

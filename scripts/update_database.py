@@ -301,8 +301,10 @@ def _patch_about_html(stats: dict, export_date: str) -> None:
     except Exception:
         formatted_date = export_date
 
+    # The HTML has "WCA data export</a> (May 21, 2026)" so we skip over any
+    # tags/whitespace between the link text and the parenthesised date.
     html = re.sub(
-        r'(WCA data export\s*\()[^)]+(\))',
+        r'(WCA data export[^(]*\()[^)]+(\))',
         rf'\g<1>{formatted_date}\g<2>',
         html,
     )
