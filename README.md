@@ -1,6 +1,6 @@
 # SpeedCubeMuse
 
-An AI-powered tool that lets you query World Cube Association competition data using plain English. Available as both a web app and a Discord bot.
+An AI-powered tool that lets you query World Cube Association competition data using plain English, and ask WCA rules questions to an AI trained on the official regulations. Available as both a web app and a Discord bot.
 
 **Live site:** [speedcubemuse.fly.dev](https://speedcubemuse.fly.dev)
 
@@ -8,22 +8,25 @@ An AI-powered tool that lets you query World Cube Association competition data u
 
 - Natural language to SQL translation using Anthropic's Claude AI
 - Query WCA statistics using plain English — no SQL required
+- **Ask a Delegate** — AI chatbot grounded in WCA Regulations and Guidelines using a RAG pipeline
 - Web interface with instant results displayed in formatted tables
 - Discord bot with the same query capabilities
-- Google sign-in via Supabase Auth
+- Google and WCA OAuth sign-in via Supabase Auth
 - Save and revisit past queries from your profile
-- Guest access with 5 free queries before sign-in required
+- Guest access with limited free queries before sign-in required
 
 ## Database
 
-The app queries a database populated from the official [WCA data export](https://www.worldcubeassociation.org/export/results) (March 14, 2026), containing:
+The app queries a database populated from the official [WCA data export](https://www.worldcubeassociation.org/export/results) (May 30, 2026), containing:
 
 | Stat | Count |
 |------|-------|
-| Competitors | 281,645 |
-| Results | 6,346,883 |
-| Competitions | 17,150 |
-| Events | 21 |
+| Competitors | 290,235 |
+| Results | 6,602,196 |
+| Competitions | 17,799 |
+| Events | 17 |
+
+The database is updated using `scripts/update_database.py`, which downloads the latest WCA export, reloads all tables, and automatically patches the stat numbers and export date in the about page.
 
 ## Tech Stack
 
@@ -33,21 +36,29 @@ The app queries a database populated from the official [WCA data export](https:/
 - **WCA Database:** TiDB Serverless (MySQL-compatible)
 - **Auth & Saved Queries:** Supabase (PostgreSQL + Auth)
 - **Discord:** discord.py
-- **Deployment:** Fly.io, Docker, Gunicorn
+- **Deployment:** Fly.io, Docker, Gunicorn, supervisord
+- **CI/CD:** GitHub Actions
 
 ## How It Works
 
+### WCA Data Queries
 1. User asks a question in plain English (web or Discord)
 2. Claude AI translates the question into a SQL query against the WCA database schema
 3. The query executes against TiDB Serverless and results are returned in a formatted table
+
+### Ask a Delegate
+1. User asks a WCA rules question in plain English
+2. The question is matched against all 697 WCA regulations and guidelines using Voyage AI vector embeddings and pgvector similarity search, then re-ranked
+3. Claude generates a grounded response with citations linked to the official WCA Regulations page
 
 ## Web App
 
 The web interface provides:
 - A search bar to ask any question about WCA data
 - Formatted result tables with the generated SQL visible
-- Google sign-in for unlimited queries and saved query history
-- A profile page with account info and saved queries
+- **Ask a Delegate** page for WCA rules and regulation questions
+- Google and WCA OAuth sign-in for unlimited queries and saved query history
+- A profile page with account info, provider badge (Google/WCA), and saved queries
 
 ## Discord Bot
 
@@ -83,18 +94,28 @@ wca_statbot/
 ├── app.py                  # Flask web application
 ├── bot.py                  # Discord bot
 ├── config.py               # Configuration management
+├── supervisord.conf        # Multi-process supervisor (web + bot)
 ├── services/
 │   ├── nl_to_sql.py        # Natural language to SQL translation (Claude AI)
 │   ├── wca_api.py          # WCA database query execution and formatting
+│   ├── delegate.py         # Ask a Delegate RAG pipeline (Voyage AI + Claude)
 │   ├── auth.py             # Supabase authentication helpers
 │   └── saved_queries.py    # Saved query CRUD operations
 ├── templates/
 │   ├── index.html          # Main query page
 │   ├── about.html          # About page
-│   ├── login.html          # Login page (Google / WCA auth)
+│   ├── delegate.html       # Ask a Delegate page
+│   ├── login.html          # Login page (Google / WCA OAuth)
 │   └── profile.html        # Profile page with saved queries
 ├── static/
 │   └── style.css           # Styles
+├── scripts/
+│   └── update_database.py  # Download and reload WCA data export into TiDB
+├── tests/
+│   └── test_database.py    # Integration tests for database integrity
+├── .github/
+│   └── workflows/
+│       └── deploy.yml      # GitHub Actions CI/CD (auto-deploy to Fly.io)
 ├── Dockerfile              # Docker container for deployment
 ├── fly.toml                # Fly.io configuration
 ├── requirements.txt        # Python dependencies
@@ -107,6 +128,7 @@ wca_statbot/
 
 - Python 3.10+
 - [Anthropic API key](https://console.anthropic.com/)
+- [Voyage AI API key](https://www.voyageai.com/) (for Ask a Delegate)
 - TiDB Serverless database (or local MySQL) with WCA data imported
 - Supabase project (for auth and saved queries)
 - Discord bot token (if running the bot)
@@ -126,7 +148,10 @@ Create a `.env` file:
 ```env
 # Anthropic
 ANTHROPIC_API_KEY=your_key_here
-ANTHROPIC_MODEL=claude-3-haiku-20240307
+ANTHROPIC_MODEL=claude-sonnet-4-20250514
+
+# Voyage AI (Ask a Delegate RAG)
+VOYAGE_API_KEY=your_key_here
 
 # WCA Database (TiDB Serverless)
 DB_HOST=gateway01.us-east-1.prod.aws.tidbcloud.com
@@ -139,6 +164,15 @@ DB_SSL=true
 # Supabase
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_ANON_KEY=your_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+
+# WCA OAuth
+WCA_CLIENT_ID=your_wca_client_id
+WCA_CLIENT_SECRET=your_wca_client_secret
+WCA_REDIRECT_URI=http://localhost:5000/auth/wca/callback
+
+# Flask
+SECRET_KEY=your_secret_key
 
 # Discord (optional, for bot only)
 DISCORD_TOKEN=your_discord_token
@@ -161,25 +195,46 @@ python app.py
 python bot.py
 ```
 
-## Deployment
-
-The app is deployed on [Fly.io](https://fly.io) using Docker.
+### Update the database
 
 ```bash
-# Deploy
+python scripts/update_database.py           # skip if already up to date
+python scripts/update_database.py --force   # reload regardless
+```
+
+### Run database integrity tests
+
+```bash
+python -m pytest tests/test_database.py -v
+```
+
+## Deployment
+
+The app is deployed on [Fly.io](https://fly.io) using Docker. The container runs both the web app and Discord bot via supervisord. Pushes to `main` automatically deploy via GitHub Actions.
+
+```bash
+# Manual deploy
 fly deploy
 
 # Set secrets
-fly secrets set ANTHROPIC_API_KEY=... DB_HOST=... DB_PORT=... DB_USER=... DB_PASSWORD=... DB_NAME=... DB_SSL=true SUPABASE_URL=... SUPABASE_ANON_KEY=...
+fly secrets set \
+  ANTHROPIC_API_KEY=... \
+  VOYAGE_API_KEY=... \
+  DB_HOST=... DB_PORT=... DB_USER=... DB_PASSWORD=... DB_NAME=... DB_SSL=true \
+  SUPABASE_URL=... SUPABASE_ANON_KEY=... SUPABASE_SERVICE_ROLE_KEY=... \
+  WCA_CLIENT_ID=... WCA_CLIENT_SECRET=... WCA_REDIRECT_URI=... \
+  SECRET_KEY=... \
+  DISCORD_TOKEN=...
 ```
 
 ## Security
 
 - SQL validation rejects non-SELECT queries and blocks dangerous keywords
-- Rate limiting on all API endpoints (flask-limiter)
-- HTML escaping on all query result output
-- Security headers (X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy)
-- Input validation and length limits
+- Rate limiting on all API endpoints (Flask-Limiter), with exemptions for authenticated users
+- Content Security Policy (CSP) header restricting script, style, and connection sources
+- HTML escaping on all user-facing output
+- Security headers (X-Content-Type-Options, X-Frame-Options: DENY, Referrer-Policy, Permissions-Policy)
+- Input validation, history size limits, and length caps on RAG requests
 - Row Level Security on Supabase saved queries table
 
 ## License

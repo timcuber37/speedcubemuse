@@ -272,6 +272,44 @@ def print_and_update_stats(export_date: str) -> None:
     print('=' * 40 + '\n')
 
     _patch_about_html(stats, export_date)
+    _patch_readme(stats, export_date)
+
+
+def _patch_readme(stats: dict, export_date: str) -> None:
+    """Update the stat table and export date in README.md."""
+    readme_path = _HERE.parent / 'README.md'
+    if not readme_path.exists():
+        log.warning("README.md not found at %s — skipping auto-update", readme_path)
+        return
+
+    text = readme_path.read_text(encoding='utf-8')
+
+    # Update each markdown table row, e.g. "| Competitors | 281,645 |"
+    for label, count in stats.items():
+        text = re.sub(
+            r'(\|\s*' + re.escape(label) + r'\s*\|\s*)[^|]+(\|)',
+            rf'\g<1>{count:,} \g<2>',
+            text,
+        )
+
+    # Update the export date, e.g. "(May 21, 2026)"
+    from datetime import datetime
+    try:
+        dt = datetime.strptime(export_date, '%Y-%m-%d')
+        formatted_date = dt.strftime('%B') + ' ' + str(dt.day) + ', ' + str(dt.year)
+    except Exception:
+        formatted_date = export_date
+
+    # In the README the date sits after the markdown link: "](url) (May 21, 2026)"
+    # Anchor to the closing paren of the URL so we don't accidentally match the URL itself.
+    text = re.sub(
+        r'(export/results\)\s*\()[^)]+(\))',
+        rf'\g<1>{formatted_date}\g<2>',
+        text,
+    )
+
+    readme_path.write_text(text, encoding='utf-8')
+    log.info("README.md updated with latest stats and export date: %s", formatted_date)
 
 
 def _patch_about_html(stats: dict, export_date: str) -> None:
