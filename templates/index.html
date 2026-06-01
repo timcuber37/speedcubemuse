@@ -243,6 +243,13 @@
                 submitBtn.disabled = false;
             }
         });
+
+        // Auto-run a query passed via ?q= (e.g. from the profile re-run button)
+        const prefilledQuery = new URLSearchParams(window.location.search).get('q');
+        if (prefilledQuery) {
+            input.value = prefilledQuery;
+            form.dispatchEvent(new Event('submit'));
+        }
     </script>
 </body>
 </html>

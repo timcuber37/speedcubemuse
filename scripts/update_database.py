@@ -350,6 +350,18 @@ def _patch_about_html(stats: dict, export_date: str) -> None:
     about_path.write_text(html, encoding='utf-8')
     log.info("about.html updated with latest stats and export date: %s", formatted_date)
 
+    # Also update the footer date in index.html — format is "from May 25, 2026."
+    index_path = _HERE.parent / 'templates' / 'index.html'
+    if index_path.exists():
+        index_html = index_path.read_text(encoding='utf-8')
+        index_html = re.sub(
+            r'(WCA data export</a> from )[A-Za-z]+ \d+, \d+',
+            rf'\g<1>{formatted_date}',
+            index_html,
+        )
+        index_path.write_text(index_html, encoding='utf-8')
+        log.info("index.html footer updated with export date: %s", formatted_date)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Update TiDB with latest WCA data export')
