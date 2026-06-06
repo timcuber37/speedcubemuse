@@ -164,11 +164,13 @@ def query():
 
         results = run_async(wca_service.execute_query(sql_query))
         html_table = wca_service.format_results_html(results, max_results=MAX_QUERY_RESULTS)
+        summary = run_async(nl_to_sql_service.summarize_results(question, results))
 
         return jsonify({
             'html': html_table,
             'sql': sql_query,
-            'count': len(results)
+            'count': len(results),
+            'summary': summary,
         })
 
     except Exception as e:

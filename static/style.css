@@ -290,6 +290,14 @@ details summary:hover {
     margin-bottom: 12px;
 }
 
+#summary {
+    font-size: 1rem;
+    color: #000000;
+    margin-bottom: 16px;
+    line-height: 1.6;
+    min-height: 0;
+}
+
 /* Save Button */
 .save-btn {
     display: flex;

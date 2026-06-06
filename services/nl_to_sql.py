@@ -180,6 +180,33 @@ SQL Query:"""
             logger.error(f"Error translating to SQL: {e}")
             return None
 
+    async def summarize_results(self, question: str, results: list) -> str:
+        """Return a 1-2 sentence natural language answer to the question given the query results."""
+        if not self.client or not results:
+            return None
+
+        # Cap rows sent to Claude to keep token usage low
+        sample = results[:10]
+        rows_text = '\n'.join(str(row) for row in sample)
+        if len(results) > 10:
+            rows_text += f'\n... and {len(results) - 10} more rows'
+
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=150,
+                temperature=0.3,
+                system="You are a helpful assistant summarizing WCA competition database query results. Write 1-2 sentences directly answering the user's question based on the data. Be concise and specific — include key names, numbers, or times from the results. Do not mention SQL.",
+                messages=[{
+                    "role": "user",
+                    "content": f"Question: {question}\n\nResults:\n{rows_text}"
+                }]
+            )
+            return response.content[0].text.strip()
+        except Exception as e:
+            logger.warning(f"Summary generation failed: {e}")
+            return None
+
     def validate_sql(self, sql_query: str) -> bool:
         """Validate that SQL is a safe read-only SELECT query."""
         sql_upper = sql_query.strip().upper()

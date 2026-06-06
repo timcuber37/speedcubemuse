@@ -49,6 +49,7 @@
         <div id="error" class="hidden"></div>
 
         <div id="results" class="hidden">
+            <p id="summary"></p>
             <div class="results-header">
                 <div id="result-count"></div>
                 <button class="save-btn hidden" id="save-btn" onclick="saveCurrentQuery()">
@@ -178,6 +179,7 @@
         const sqlCode = document.getElementById('sql-code');
         const resultCount = document.getElementById('result-count');
         const tableContainer = document.getElementById('table-container');
+        const summaryEl = document.getElementById('summary');
         const submitBtn = document.getElementById('submit-btn');
 
         const GUEST_QUERY_LIMIT = 5;
@@ -225,6 +227,7 @@
                 // Count this query for guests
                 if (!currentUser) incrementGuestQueryCount();
 
+                summaryEl.textContent = data.summary || '';
                 sqlCode.textContent = data.sql;
                 resultCount.textContent = `${data.count} result${data.count !== 1 ? 's' : ''} found`;
                 tableContainer.innerHTML = data.html;
