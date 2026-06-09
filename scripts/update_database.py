@@ -96,21 +96,52 @@ def table_name_from_tsv(filename: str) -> str:
 # abort an entire table load, and logs exactly what caused the failure.
 # ---------------------------------------------------------------------------
 
-def _flush(cur, conn, insert_sql: str, batch: list, table: str) -> None:
+def _insert_individually(conn, insert_sql: str, batch: list, table: str) -> None:
+    """Insert a batch one row at a time, reconnecting on connection loss so a
+    dropped connection (or an oversized multi-row packet) can't abort the load."""
+    cur = conn.cursor()
+    for row_data in batch:
+        try:
+            cur.execute(insert_sql, row_data)
+        except (pymysql.err.OperationalError, pymysql.err.InterfaceError):
+            # Connection went away — reconnect and retry this single row once.
+            conn.ping(reconnect=True)
+            cur = conn.cursor()
+            try:
+                cur.execute(insert_sql, row_data)
+            except pymysql.err.DatabaseError as e:
+                log.warning("  Skipping bad row in %s: %s | values: %s", table, e, row_data)
+        except pymysql.err.DatabaseError as e:
+            log.warning("  Skipping bad row in %s: %s | values: %s", table, e, row_data)
+    conn.commit()
+    cur.close()
+
+
+def _flush(conn, insert_sql: str, batch: list, table: str) -> None:
+    # Fresh cursor each call: after a reconnect the previous cursor is bound to a
+    # dead socket and would raise InterfaceError on every subsequent batch.
+    cur = conn.cursor()
     try:
         cur.executemany(insert_sql, batch)
         conn.commit()
-    except (pymysql.err.DataError, pymysql.err.DatabaseError):
+    except (pymysql.err.OperationalError, pymysql.err.InterfaceError) as e:
+        # Connection dropped mid-query (TiDB idle/timeout, network blip, or an
+        # oversized packet). Reconnect and retry row-by-row with smaller packets.
+        log.warning("  Connection lost while loading %s (%s) — reconnecting", table, e)
+        conn.ping(reconnect=True)
+        _insert_individually(conn, insert_sql, batch, table)
+    except pymysql.err.DatabaseError:
+        # Bad data somewhere in the batch — isolate the offending row(s).
         try:
             conn.rollback()
         except Exception:
             pass
-        for row_data in batch:
-            try:
-                cur.execute(insert_sql, row_data)
-            except (pymysql.err.DataError, pymysql.err.DatabaseError) as e:
-                log.warning("  Skipping bad row in %s: %s | values: %s", table, e, row_data)
-        conn.commit()
+        _insert_individually(conn, insert_sql, batch, table)
+    finally:
+        try:
+            cur.close()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -159,13 +190,13 @@ def load_table(conn: pymysql.Connection, table: str,
         batch.append([None if v in (r'\N', 'NULL') else v for v in row])
         total += 1
         if len(batch) >= BATCH_SIZE:
-            _flush(cur, conn, insert_sql, batch, table)
+            _flush(conn, insert_sql, batch, table)
             batch = []
             if total % 500_000 == 0:
                 log.info("  %s: %d rows loaded...", table, total)
 
     if batch:
-        _flush(cur, conn, insert_sql, batch, table)
+        _flush(conn, insert_sql, batch, table)
 
     if skipped:
         log.warning("  %s: skipped %d malformed rows", table, skipped)
