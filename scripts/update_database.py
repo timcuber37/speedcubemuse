@@ -18,6 +18,7 @@ import sys
 import zipfile
 from pathlib import Path
 
+import certifi
 import pymysql
 import requests
 from dotenv import load_dotenv
@@ -45,7 +46,11 @@ BATCH_SIZE = 500
 def get_connection() -> pymysql.Connection:
     kwargs = {}
     if DB_SSL:
-        kwargs['ssl'] = ssl.create_default_context()
+        # Verify against the certifi CA bundle rather than the OS trust store:
+        # on Windows the system store can carry a stale/expired root that makes
+        # TiDB Cloud's valid cert fail verification. certifi is what requests
+        # already uses successfully for the export download above.
+        kwargs['ssl'] = ssl.create_default_context(cafile=certifi.where())
     return pymysql.connect(
         host=DB_HOST,
         port=DB_PORT,
