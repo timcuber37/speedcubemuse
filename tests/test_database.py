@@ -10,6 +10,7 @@ import ssl
 import sys
 from pathlib import Path
 
+import certifi
 import pymysql
 import pytest
 
@@ -24,7 +25,7 @@ from config import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, DB_SSL
 def conn():
     kwargs = {}
     if DB_SSL:
-        kwargs['ssl'] = ssl.create_default_context()
+        kwargs['ssl'] = ssl.create_default_context(cafile=certifi.where())
     connection = pymysql.connect(
         host=DB_HOST,
         port=DB_PORT,

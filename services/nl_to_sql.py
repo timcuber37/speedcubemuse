@@ -1,9 +1,12 @@
 """Natural Language to SQL translation service."""
 import logging
 from anthropic import Anthropic
-from config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL
+from config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL, QUERY_MODELS
 
 logger = logging.getLogger(__name__)
+
+# Opus 4.7+ and Fable 5 reject sampling params (temperature/top_p/top_k) with a 400.
+_NO_SAMPLING_MODELS = {"claude-opus-4-8", "claude-opus-4-7", "claude-fable-5"}
 
 
 class NLToSQLService:
@@ -18,7 +21,7 @@ class NLToSQLService:
             self.client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
         self.model = ANTHROPIC_MODEL
-        
+
         # WCA database schema information for the AI
         self.schema_context = """
 The World Cube Association (WCA) database contains the following tables:
@@ -118,13 +121,39 @@ WHERE r.event_id = '333' AND r.person_id = 'WCAID'
 ORDER BY ra.attempt_number
 """
     
-    async def translate_to_sql(self, question: str) -> str:
+    def _resolve_model(self, model_key: str) -> str:
+        """Map a user-supplied model key to an allowed model ID.
+
+        Falls back to the configured default model for unknown or missing keys,
+        so callers can never request an arbitrary model string.
+        """
+        if model_key and model_key in QUERY_MODELS:
+            return QUERY_MODELS[model_key]
+        return self.model
+
+    def _create_message(self, model_id: str, max_tokens: int, system: str, messages: list):
+        """Call the Anthropic API, omitting sampling params for models that reject them."""
+        kwargs = {
+            "model": model_id,
+            "max_tokens": max_tokens,
+            "system": system,
+            "messages": messages,
+        }
+        if model_id not in _NO_SAMPLING_MODELS:
+            kwargs["temperature"] = 0.3
+        response = self.client.messages.create(**kwargs)
+        logger.info(f"NL-to-SQL model: requested={model_id}, served={response.model}")
+        return response
+
+    async def translate_to_sql(self, question: str, model: str = None) -> str:
         """
         Translate a natural language question to a SQL query.
-        
+
         Args:
             question: The user's question in natural language
-            
+            model: Optional model key ("opus", "sonnet", "haiku"); falls back
+                to the configured default when missing or unrecognized.
+
         Returns:
             SQL query string, or None if translation fails
         """
@@ -146,10 +175,9 @@ Generate a SQL query that answers this question. Return ONLY the SQL query, no e
 
 SQL Query:"""
 
-            response = self.client.messages.create(
-                model=self.model,
+            response = self._create_message(
+                self._resolve_model(model),
                 max_tokens=500,
-                temperature=0.3,
                 system=system_prompt,
                 messages=[
                     {"role": "user", "content": user_prompt}
@@ -180,7 +208,7 @@ SQL Query:"""
             logger.error(f"Error translating to SQL: {e}")
             return None
 
-    async def summarize_results(self, question: str, results: list) -> str:
+    async def summarize_results(self, question: str, results: list, model: str = None) -> str:
         """Return a 1-2 sentence natural language answer to the question given the query results."""
         if not self.client or not results:
             return None
@@ -192,10 +220,9 @@ SQL Query:"""
             rows_text += f'\n... and {len(results) - 10} more rows'
 
         try:
-            response = self.client.messages.create(
-                model=self.model,
+            response = self._create_message(
+                self._resolve_model(model),
                 max_tokens=150,
-                temperature=0.3,
                 system="You are a helpful assistant summarizing WCA competition database query results. Write 1-2 sentences directly answering the user's question based on the data. Be concise and specific — include key names, numbers, or times from the results. Do not mention SQL.",
                 messages=[{
                     "role": "user",

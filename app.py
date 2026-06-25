@@ -19,7 +19,8 @@ if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from config import (MAX_QUERY_RESULTS, SUPABASE_URL, SUPABASE_ANON_KEY,
-                    WCA_CLIENT_ID, WCA_CLIENT_SECRET, WCA_REDIRECT_URI, SECRET_KEY)
+                    WCA_CLIENT_ID, WCA_CLIENT_SECRET, WCA_REDIRECT_URI, SECRET_KEY,
+                    QUERY_MODELS, DEFAULT_QUERY_MODEL)
 from services.nl_to_sql import NLToSQLService
 from services.wca_api import WCAService
 from services.auth import get_user_from_token, find_or_create_wca_user, generate_wca_login_link
@@ -37,6 +38,9 @@ app = Flask(__name__)
 app.secret_key = SECRET_KEY or secrets.token_hex(32)
 
 MAX_QUESTION_LENGTH = 2000
+
+# Models that guests (signed-out users) may use. Opus and Sonnet require sign-in.
+GUEST_QUERY_MODELS = {'haiku'}
 
 limiter = Limiter(
     app=app,
@@ -154,8 +158,19 @@ def query():
     if len(question) > MAX_QUESTION_LENGTH:
         return jsonify({'error': f'Question too long (max {MAX_QUESTION_LENGTH} characters).'}), 400
 
+    model = data.get('model')
+    if model is not None and not isinstance(model, str):
+        return jsonify({'error': 'Invalid model format.'}), 400
+
+    # Opus and Sonnet are restricted to signed-in users; guests get Haiku only.
+    effective_model = model if model in QUERY_MODELS else DEFAULT_QUERY_MODEL
+    if effective_model not in GUEST_QUERY_MODELS:
+        user, _ = get_current_user()
+        if user is None:
+            return jsonify({'error': 'Sign in to use Opus or Sonnet. Guests can use Haiku.'}), 403
+
     try:
-        sql_query = run_async(nl_to_sql_service.translate_to_sql(question))
+        sql_query = run_async(nl_to_sql_service.translate_to_sql(question, model=model))
 
         if not sql_query:
             return jsonify({'error': 'Could not translate your question to a safe SQL query.'}), 400
@@ -164,7 +179,7 @@ def query():
 
         results = run_async(wca_service.execute_query(sql_query))
         html_table = wca_service.format_results_html(results, max_results=MAX_QUERY_RESULTS)
-        summary = run_async(nl_to_sql_service.summarize_results(question, results))
+        summary = run_async(nl_to_sql_service.summarize_results(question, results, model=model))
 
         return jsonify({
             'html': html_table,

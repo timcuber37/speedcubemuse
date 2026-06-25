@@ -3,6 +3,7 @@ import logging
 import re
 import ssl
 import aiomysql
+import certifi
 from typing import List, Dict, Any
 from unidecode import unidecode
 from wcwidth import wcswidth
@@ -40,7 +41,10 @@ class WCAService:
                     'autocommit': True,
                 }
                 if DB_SSL:
-                    ctx = ssl.create_default_context()
+                    # Verify against the certifi CA bundle, not the OS trust
+                    # store, which on some hosts carries a stale/expired root
+                    # that breaks verification of TiDB Cloud's valid cert.
+                    ctx = ssl.create_default_context(cafile=certifi.where())
                     pool_kwargs['ssl'] = ctx
                 self.pool = await aiomysql.create_pool(**pool_kwargs)
                 logger.info("Database connection pool created successfully")

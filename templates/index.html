@@ -5,11 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SpeedCubeMuse</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-32.png') }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon-16.png') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
 </head>
 <body>
     <nav class="navbar">
         <div class="nav-inner">
-            <a href="/" class="nav-logo">SpeedCubeMuse</a>
+            <a href="/" class="nav-logo"><img src="{{ url_for('static', filename='logo.png') }}" alt="" class="nav-logo-img">SpeedCubeMuse</a>
             <div class="nav-links">
                 <a href="/" class="nav-link active">Home</a>
                 <a href="/delegate" class="nav-link">Ask a Delegate</a>
@@ -38,6 +41,14 @@
                         <polyline points="12 5 19 12 12 19"></polyline>
                     </svg>
                 </button>
+            </div>
+            <div class="model-select-row">
+                <label for="model-select" class="model-select-label">Model</label>
+                <select id="model-select" class="model-select">
+                    <option value="haiku">Haiku · fastest</option>
+                    <option value="sonnet" data-premium="1">Sonnet · balanced</option>
+                    <option value="opus" data-premium="1">Opus · most capable</option>
+                </select>
             </div>
         </form>
 
@@ -121,6 +132,7 @@
                 authBtn.classList.remove('signed-in');
                 saveBtn.classList.add('hidden');
             }
+            updateModelOptions(!!session?.user);
         }
 
         function handleAuth() {
@@ -181,6 +193,31 @@
         const tableContainer = document.getElementById('table-container');
         const summaryEl = document.getElementById('summary');
         const submitBtn = document.getElementById('submit-btn');
+        const modelSelect = document.getElementById('model-select');
+        const premiumOptions = [...modelSelect.options].filter(o => o.dataset.premium);
+        premiumOptions.forEach(o => { o.dataset.baseLabel = o.textContent; });
+
+        // Opus and Sonnet require sign-in; lock them for guests.
+        function updateModelOptions(signedIn) {
+            premiumOptions.forEach(o => {
+                o.disabled = !signedIn;
+                o.textContent = signedIn ? o.dataset.baseLabel : `${o.dataset.baseLabel} 🔒`;
+            });
+            if (!signedIn && modelSelect.selectedOptions[0]?.dataset.premium) {
+                modelSelect.value = 'haiku';
+            }
+        }
+
+        // Remember the user's model choice across visits
+        const savedModel = localStorage.getItem('queryModel');
+        if (savedModel && [...modelSelect.options].some(o => o.value === savedModel)) {
+            modelSelect.value = savedModel;
+        }
+        modelSelect.addEventListener('change', () => {
+            localStorage.setItem('queryModel', modelSelect.value);
+        });
+
+        updateModelOptions(!!currentUser);
 
         const GUEST_QUERY_LIMIT = 5;
 
@@ -210,10 +247,14 @@
             submitBtn.disabled = true;
 
             try {
+                const headers = { 'Content-Type': 'application/json' };
+                const token = await getAccessToken();
+                if (token) headers['Authorization'] = `Bearer ${token}`;
+
                 const response = await fetch('/query', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ question })
+                    headers,
+                    body: JSON.stringify({ question, model: modelSelect.value })
                 });
 
                 const data = await response.json();

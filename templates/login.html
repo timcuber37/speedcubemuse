@@ -5,11 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sign In - SpeedCubeMuse</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-32.png') }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon-16.png') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
 </head>
 <body>
     <nav class="navbar">
         <div class="nav-inner">
-            <a href="/" class="nav-logo">SpeedCubeMuse</a>
+            <a href="/" class="nav-logo"><img src="{{ url_for('static', filename='logo.png') }}" alt="" class="nav-logo-img">SpeedCubeMuse</a>
             <div class="nav-links">
                 <a href="/" class="nav-link">Home</a>
                 <a href="/delegate" class="nav-link">Ask a Delegate</a>
