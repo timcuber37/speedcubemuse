@@ -17,13 +17,13 @@ An AI-powered tool that lets you query World Cube Association competition data u
 
 ## Database
 
-The app queries a database populated from the official [WCA data export](https://www.worldcubeassociation.org/export/results) (June 29, 2026), containing:
+The app queries a database populated from the official [WCA data export](https://www.worldcubeassociation.org/export/results) (July 6, 2026), containing:
 
 | Stat | Count |
 |------|-------|
-| Competitors | 292,030 |
-| Results | 6,673,486 |
-| Competitions | 18,031 |
+| Competitors | 292,488 |
+| Results | 6,693,874 |
+| Competitions | 18,077 |
 | Events | 17 |
 
 The database is updated using `scripts/update_database.py`, which downloads the latest WCA export, reloads all tables, and automatically patches the stat numbers and export date in the about page.
