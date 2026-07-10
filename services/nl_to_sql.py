@@ -1,12 +1,40 @@
 """Natural Language to SQL translation service."""
+import json
 import logging
-from anthropic import Anthropic
+import re
+from anthropic import AsyncAnthropic
 from config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL, QUERY_MODELS
 
 logger = logging.getLogger(__name__)
 
-# Opus 4.7+ and Fable 5 reject sampling params (temperature/top_p/top_k) with a 400.
-_NO_SAMPLING_MODELS = {"claude-opus-4-8", "claude-opus-4-7", "claude-fable-5"}
+
+def _execution_error(results) -> str:
+    """Return the DB error message when results carry execute_query's error shape."""
+    if isinstance(results, list) and len(results) == 1 \
+            and isinstance(results[0], dict) and 'error' in results[0]:
+        return str(results[0].get('message', 'Unknown error'))
+    return None
+
+# Structured output schema: the API guarantees the response is valid JSON in
+# this shape, so no markdown-fence stripping is needed.
+_SQL_OUTPUT_FORMAT = {
+    "type": "json_schema",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "sql": {
+                "type": ["string", "null"],
+                "description": "A single SQL SELECT query answering the question, or null if it cannot be answered",
+            },
+            "error": {
+                "type": ["string", "null"],
+                "description": "Brief reason the question cannot be answered with SQL, when sql is null",
+            },
+        },
+        "required": ["sql", "error"],
+        "additionalProperties": False,
+    },
+}
 
 
 class NLToSQLService:
@@ -18,7 +46,9 @@ class NLToSQLService:
             logger.warning("ANTHROPIC_API_KEY not set. NL-to-SQL translation will not work.")
             self.client = None
         else:
-            self.client = Anthropic(api_key=ANTHROPIC_API_KEY)
+            # Async client — the sync client blocks the event loop for the
+            # duration of each API call (freezes the Discord bot for all users).
+            self.client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
 
         self.model = ANTHROPIC_MODEL
 
@@ -71,11 +101,18 @@ Common event IDs:
 
 IMPORTANT NOTES:
 - Time values are stored in centiseconds (1/100th of a second). Example: 1000 = 10.00 seconds, 6000 = 1:00.00
+- EXCEPTIONS to centiseconds: for '333fm' (Fewest Moves), single values are move counts (e.g. 16 = 16 moves) and average values are move counts x 100 (e.g. 1900 = 19.00 moves). For '333mbf' (Multi-Blind), the value encodes the whole result as DDTTTTTMM (DD = 99 minus points, TTTTT = time in seconds, MM = missed cubes); lower values are better, so ordering still works, but do not treat it as a time. Always include event_id in the SELECT when querying '333fm' or '333mbf' so values can be displayed correctly
 - -1 means DNF (Did Not Finish), -2 means DNS (Did Not Start), 0 means no result
 - The 'best' column in ranks_single and ranks_average contains the person's best time
 - World rank 1 means world record holder
+- RECORDS: results.regional_single_record and results.regional_average_record mark records set by that result: 'WR' = world record, 'NR' = national record, continental records are 'ER' (Europe), 'NAR' (North America), 'SAR' (South America), 'AsR' (Asia), 'AfR' (Africa), 'OcR' (Oceania). Use these columns for questions about records set or held
+- NAMES: person names may include a parenthesized local-script form (e.g. "Ken'ichi Ueno (上野健一)"). Always match names fuzzily: WHERE p.name LIKE '%Max Park%'
+- COUNTRIES: country_id values are English country names ('China', 'Germany', 'United Kingdom'), except the United States which is 'USA'. When unsure of the exact id, join the countries table and match countries.name or countries.iso2
+- DATES: competitions store dates as integer columns year/month/day (start) and end_year/end_month/end_day — there is no DATE column. cancelled = 1 marks cancelled competitions; exclude them by default
+- ROUNDS: round_type_id 'f' = Final and 'c' = Combined Final (treat both as finals); '1'/'2'/'3' = numbered rounds, 'd'/'e'/'g' = combined rounds, '0'/'h' = qualification, 'b' = B final
 - Individual solve attempt values are in result_attempts, NOT in the results table. Join on result_attempts.result_id = results.id
 - For questions about overall best/average in a round, use the results table. For individual attempt values, join result_attempts
+- Unless the question implies otherwise, add LIMIT 50 to queries that can return many rows
 
 EXAMPLE QUERIES:
 
@@ -119,8 +156,45 @@ FROM results r
 JOIN result_attempts ra ON ra.result_id = r.id
 WHERE r.event_id = '333' AND r.person_id = 'WCAID'
 ORDER BY ra.attempt_number
+
+Person with the most world record singles:
+SELECT person_name, COUNT(*) as wr_count
+FROM results
+WHERE regional_single_record = 'WR'
+GROUP BY person_id, person_name
+ORDER BY wr_count DESC
+LIMIT 10
+
+A specific person's best 3x3 time (fuzzy name match):
+SELECT p.name, r.best, r.world_rank, p.country_id
+FROM ranks_single r
+JOIN persons p ON r.person_id = p.wca_id
+WHERE p.name LIKE '%Max Park%' AND r.event_id = '333'
+
+Competitions held in the United States in 2025:
+SELECT name, city_name, year, month, day
+FROM competitions
+WHERE country_id = 'USA' AND year = 2025 AND cancelled = 0
+ORDER BY month, day
+LIMIT 50
+
+Winner of the 3x3 final at the 2023 World Championship:
+SELECT r.person_name, r.best, r.average, r.pos
+FROM results r
+JOIN competitions c ON r.competition_id = c.id
+WHERE c.name LIKE '%World Championship 2023%' AND r.event_id = '333'
+  AND r.round_type_id IN ('f', 'c') AND r.pos = 1
 """
-    
+
+        # Static across all requests — built once so the cached prefix is byte-identical.
+        self.system_prompt = f"""You are a SQL expert for the World Cube Association (WCA) database.
+
+{self.schema_context}
+
+Generate a SQL query that answers the user's question: set "sql" to the query and "error" to null.
+If the question cannot be answered with SQL against this schema, set "sql" to null and "error" to a brief reason."""
+
+
     def _resolve_model(self, model_key: str) -> str:
         """Map a user-supplied model key to an allowed model ID.
 
@@ -131,19 +205,57 @@ ORDER BY ra.attempt_number
             return QUERY_MODELS[model_key]
         return self.model
 
-    def _create_message(self, model_id: str, max_tokens: int, system: str, messages: list):
-        """Call the Anthropic API, omitting sampling params for models that reject them."""
+    async def _create_message(self, model_id: str, max_tokens: int, system, messages: list, output_config: dict = None):
+        """Call the Anthropic API asynchronously."""
         kwargs = {
             "model": model_id,
             "max_tokens": max_tokens,
             "system": system,
             "messages": messages,
+            # Sonnet 5 runs adaptive thinking when this field is omitted, and
+            # thinking tokens count against max_tokens — keep it off for latency.
+            "thinking": {"type": "disabled"},
         }
-        if model_id not in _NO_SAMPLING_MODELS:
-            kwargs["temperature"] = 0.3
-        response = self.client.messages.create(**kwargs)
-        logger.info(f"NL-to-SQL model: requested={model_id}, served={response.model}")
+        if output_config:
+            kwargs["output_config"] = output_config
+        response = await self.client.messages.create(**kwargs)
+        usage = response.usage
+        logger.info(
+            f"NL-to-SQL model: requested={model_id}, served={response.model}, "
+            f"cache_read={usage.cache_read_input_tokens}, cache_write={usage.cache_creation_input_tokens}"
+        )
         return response
+
+    async def _generate_sql(self, user_content: str, model: str = None) -> str:
+        """Run one structured-output SQL generation call; returns validated SQL or None."""
+        response = await self._create_message(
+            self._resolve_model(model),
+            max_tokens=1024,
+            # The system prompt is identical on every request — cache it so
+            # repeat requests read it at ~10% of the input price.
+            system=[{
+                "type": "text",
+                "text": self.system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }],
+            messages=[{"role": "user", "content": user_content}],
+            output_config={"format": _SQL_OUTPUT_FORMAT},
+        )
+
+        text = next(b.text for b in response.content if b.type == "text")
+        data = json.loads(text)
+
+        if not data.get("sql"):
+            logger.warning(f"Translation declined: {data.get('error')}")
+            return None
+
+        sql_query = data["sql"].strip()
+
+        if not self.validate_sql(sql_query):
+            logger.warning(f"Rejected unsafe SQL: {sql_query}")
+            return None
+
+        return sql_query
 
     async def translate_to_sql(self, question: str, model: str = None) -> str:
         """
@@ -162,55 +274,69 @@ ORDER BY ra.attempt_number
             return None
 
         try:
-            system_prompt = f"""You are a SQL expert for the World Cube Association (WCA) database.
-
-{self.schema_context}
-
-Generate SQL queries based on natural language questions. Return ONLY the SQL query, no explanations or markdown formatting.
-If the question cannot be answered with SQL, return "ERROR: Cannot be answered with SQL"."""
-
-            user_prompt = f"""User Question: {question}
-
-Generate a SQL query that answers this question. Return ONLY the SQL query, no explanations.
-
-SQL Query:"""
-
-            response = self._create_message(
-                self._resolve_model(model),
-                max_tokens=500,
-                system=system_prompt,
-                messages=[
-                    {"role": "user", "content": user_prompt}
-                ]
-            )
-
-            sql_query = response.content[0].text.strip()
-            
-            # Remove markdown code blocks if present
-            if sql_query.startswith("```"):
-                sql_query = sql_query.split("```")[1]
-                if sql_query.startswith("sql"):
-                    sql_query = sql_query[3:]
-                sql_query = sql_query.strip()
-            
-            # Check for error
-            if sql_query.startswith("ERROR:"):
-                logger.warning(f"Translation error: {sql_query}")
-                return None
-            
-            if not self.validate_sql(sql_query):
-                logger.warning(f"Rejected unsafe SQL: {sql_query}")
-                return None
-
-            return sql_query
-
+            return await self._generate_sql(f"User Question: {question}", model=model)
         except Exception as e:
             logger.error(f"Error translating to SQL: {e}")
             return None
 
+    async def repair_sql(self, question: str, sql_query: str, db_error: str, model: str = None) -> str:
+        """Ask the model to fix a SQL query that failed at the database."""
+        if not self.client:
+            return None
+
+        try:
+            return await self._generate_sql(
+                f"""User Question: {question}
+
+This SQL query failed:
+{sql_query}
+
+Database error:
+{db_error}
+
+Generate a corrected SQL query that answers the question.""",
+                model=model,
+            )
+        except Exception as e:
+            logger.error(f"Error repairing SQL: {e}")
+            return None
+
+    async def answer_question(self, question: str, execute, model: str = None):
+        """
+        Translate a question to SQL, execute it, and repair once on a database error.
+
+        Args:
+            question: The user's question in natural language
+            execute: Async callable that runs a SQL string and returns result rows
+                (execute_query's error shape [{"error": ..., "message": ...}] on failure)
+            model: Optional model key ("opus", "sonnet", "haiku")
+
+        Returns:
+            (sql_query, results) — sql_query is None when translation fails,
+            and results is None only in that case.
+        """
+        sql_query = await self.translate_to_sql(question, model=model)
+        if not sql_query:
+            return None, None
+
+        results = await execute(sql_query)
+
+        db_error = _execution_error(results)
+        if db_error:
+            logger.info(f"SQL failed, attempting repair: {db_error}")
+            fixed_sql = await self.repair_sql(question, sql_query, db_error, model=model)
+            if fixed_sql:
+                fixed_results = await execute(fixed_sql)
+                if _execution_error(fixed_results) is None:
+                    return fixed_sql, fixed_results
+                logger.warning("Repaired SQL also failed; returning original error")
+
+        return sql_query, results
+
     async def summarize_results(self, question: str, results: list, model: str = None) -> str:
         """Return a 1-2 sentence natural language answer to the question given the query results."""
-        if not self.client or not results:
+        # Don't summarize execution-error rows — the UI already shows the error.
+        if not self.client or not results or _execution_error(results):
             return None
 
         # Cap rows sent to Claude to keep token usage low
@@ -220,7 +346,7 @@ SQL Query:"""
             rows_text += f'\n... and {len(results) - 10} more rows'
 
         try:
-            response = self._create_message(
+            response = await self._create_message(
                 self._resolve_model(model),
                 max_tokens=150,
                 system="You are a helpful assistant summarizing WCA competition database query results. Write 1-2 sentences directly answering the user's question based on the data. Be concise and specific — include key names, numbers, or times from the results. Do not mention SQL.",
@@ -229,7 +355,7 @@ SQL Query:"""
                     "content": f"Question: {question}\n\nResults:\n{rows_text}"
                 }]
             )
-            return response.content[0].text.strip()
+            return next(b.text for b in response.content if b.type == "text").strip()
         except Exception as e:
             logger.warning(f"Summary generation failed: {e}")
             return None
@@ -248,7 +374,6 @@ SQL Query:"""
         ]
         for keyword in forbidden:
             # Check as whole word to avoid false positives (e.g. "UPDATES" in a column name)
-            import re
             if re.search(r'\b' + keyword + r'\b', sql_upper):
                 return False
 

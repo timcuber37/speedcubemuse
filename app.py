@@ -170,14 +170,16 @@ def query():
             return jsonify({'error': 'Sign in to use Opus or Sonnet. Guests can use Haiku.'}), 403
 
     try:
-        sql_query = run_async(nl_to_sql_service.translate_to_sql(question, model=model))
+        # Translates, executes, and retries once with the DB error on failure.
+        sql_query, results = run_async(
+            nl_to_sql_service.answer_question(question, wca_service.execute_query, model=model)
+        )
 
         if not sql_query:
             return jsonify({'error': 'Could not translate your question to a safe SQL query.'}), 400
 
         logger.info(f"Generated SQL: {sql_query}")
 
-        results = run_async(wca_service.execute_query(sql_query))
         html_table = wca_service.format_results_html(results, max_results=MAX_QUERY_RESULTS)
         summary = run_async(nl_to_sql_service.summarize_results(question, results, model=model))
 

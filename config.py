@@ -10,13 +10,14 @@ DISCORD_GUILD_ID = os.getenv("DISCORD_GUILD_ID")  # Optional: for testing in spe
 
 # Anthropic Configuration (for NL-to-SQL translation)
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")  # default model for NL-to-SQL
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")  # default model for NL-to-SQL
 
 # User-selectable models for the main query feature.
 # Keys are the values the frontend sends; values are the Anthropic model IDs.
+# All three must support structured outputs (used by NLToSQLService).
 QUERY_MODELS = {
     "opus": "claude-opus-4-8",
-    "sonnet": "claude-sonnet-4-6",
+    "sonnet": "claude-sonnet-5",
     "haiku": "claude-haiku-4-5",
 }
 DEFAULT_QUERY_MODEL = "sonnet"

@@ -77,23 +77,20 @@ async def query_wca(ctx, *, question: str):
     thinking_msg = await ctx.send("🤔 Processing your question...")
     
     try:
-        # Step 1: Convert natural language to SQL query
+        # Step 1: Translate to SQL and execute (retries once with the DB error on failure)
         logger.info(f"User question: {question}")
-        sql_query = await nl_to_sql_service.translate_to_sql(question)
+        sql_query, results = await nl_to_sql_service.answer_question(question, wca_service.execute_query)
         logger.info(f"Generated SQL: {sql_query}")
-        
+
         if not sql_query:
             await thinking_msg.edit(content="❌ Could not generate a valid SQL query from your question.")
             return
-        
-        # Step 2: Execute query against WCA API/database
-        results = await wca_service.execute_query(sql_query)
-        
+
         if not results:
             await thinking_msg.edit(content="❌ No results found for your query.")
             return
         
-        # Step 3: Format and send results
+        # Step 2: Format and send results
         formatted_results = wca_service.format_results(results, max_results=MAX_QUERY_RESULTS)
         
         # Discord has a 2000 character limit per message

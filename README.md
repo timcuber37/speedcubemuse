@@ -148,7 +148,7 @@ Create a `.env` file:
 ```env
 # Anthropic
 ANTHROPIC_API_KEY=your_key_here
-ANTHROPIC_MODEL=claude-sonnet-4-20250514
+ANTHROPIC_MODEL=claude-sonnet-5
 
 # Voyage AI (Ask a Delegate RAG)
 VOYAGE_API_KEY=your_key_here

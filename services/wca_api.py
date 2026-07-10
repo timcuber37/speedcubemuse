@@ -129,18 +129,13 @@ class WCAService:
         name_columns = ['name', 'personName', 'person_name', 'competitorName']
 
         for row in results:
+            # Value semantics depend on the event ('333fm' = moves, '333mbf' =
+            # encoded); only known when the query selected event_id.
+            event_id = row.get('event_id')
             processed_row = {}
             for key, value in row.items():
-                # Format time results (WCA stores times in centiseconds)
                 if key in ['best', 'average', 'value']:
-                    if isinstance(value, int) and value > 0:
-                        processed_row[key] = self._format_time(value)
-                    elif value == -1:
-                        processed_row[key] = 'DNF'
-                    elif value == -2:
-                        processed_row[key] = 'DNS'
-                    else:
-                        processed_row[key] = value
+                    processed_row[key] = self._format_result_value(value, event_id)
                 # Sanitize name columns to ASCII
                 elif key in name_columns:
                     processed_row[key] = self._sanitize_name(value)
@@ -150,6 +145,38 @@ class WCAService:
             processed.append(processed_row)
 
         return processed
+
+    def _format_result_value(self, value, event_id):
+        """Format a result value according to the event's value semantics."""
+        if not isinstance(value, int):
+            return value
+        if value == -1:
+            return 'DNF'
+        if value == -2:
+            return 'DNS'
+        if value <= 0:
+            return value
+        if event_id == '333fm':
+            # Singles are plain move counts (< 100); averages are moves x 100.
+            return f"{value} moves" if value < 1000 else f"{value / 100:.2f} moves"
+        if event_id == '333mbf':
+            return self._format_multiblind(value)
+        return self._format_time(value)
+
+    def _format_multiblind(self, value: int) -> str:
+        """Decode a Multi-Blind result (DDTTTTTMM) to 'solved/attempted time'."""
+        dd = value // 10000000
+        seconds = (value // 100) % 100000
+        missed = value % 100
+        solved = (99 - dd) + missed
+        attempted = solved + missed
+        if seconds == 99999:  # unknown time
+            time_str = '?:??'
+        elif seconds >= 3600:
+            time_str = f"{seconds // 3600}:{(seconds % 3600) // 60:02d}:{seconds % 60:02d}"
+        else:
+            time_str = f"{seconds // 60}:{seconds % 60:02d}"
+        return f"{solved}/{attempted} {time_str}"
 
     def _format_time(self, centiseconds: int) -> str:
         """
