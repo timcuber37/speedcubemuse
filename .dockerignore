@@ -1,0 +1,15 @@
+# Shared by both images: the web app (./Dockerfile) and the Discord bot
+# (delegate-bot/Dockerfile, built with the repo root as context).
+venv/
+__pycache__/
+*.pyc
+.git/
+.github/
+tests/
+delegate-bot/venv/
+*.md
+.dockerignore
+# TODO: add `.env` here once `fly secrets list -a speedcubemuse` confirms all
+# production values exist as Fly secrets — today the web image relies on
+# `COPY . .` + load_dotenv() picking it up, so excluding it blindly could take
+# the site down.

@@ -17,13 +17,13 @@ An AI-powered tool that lets you query World Cube Association competition data u
 
 ## Database
 
-The app queries a database populated from the official [WCA data export](https://www.worldcubeassociation.org/export/results) (July 21, 2026), containing:
+The app queries a database populated from the official [WCA data export](https://www.worldcubeassociation.org/export/results) (August 2, 2026), containing:
 
 | Stat | Count |
 |------|-------|
-| Competitors | 293,286 |
-| Results | 6,740,536 |
-| Competitions | 18,186 |
+| Competitors | 293,935 |
+| Results | 6,764,347 |
+| Competitions | 18,280 |
 | Events | 17 |
 
 The database is updated using `scripts/update_database.py`, which downloads the latest WCA export, reloads all tables, and automatically patches the stat numbers and export date in the about page.
@@ -36,7 +36,7 @@ The database is updated using `scripts/update_database.py`, which downloads the 
 - **WCA Database:** TiDB Serverless (MySQL-compatible)
 - **Auth & Saved Queries:** Supabase (PostgreSQL + Auth)
 - **Discord:** discord.py
-- **Deployment:** Fly.io, Docker, Gunicorn, supervisord
+- **Deployment:** Fly.io (two apps: web + always-on bot), Docker, Gunicorn
 - **CI/CD:** GitHub Actions
 
 ## How It Works
@@ -66,18 +66,21 @@ The web interface provides:
 
 | Command | Description |
 |---------|-------------|
+| `/delegate <question>` | Ask about the WCA Regulations & Guidelines (opens a thread for follow-ups) |
 | `!wca query <question>` | Ask a question about WCA data |
 | `!wca q <question>` | Short alias for query |
 | `!wca ask <question>` | Another alias for query |
 | `!wca help` | Show available commands |
 | `!wca ping` | Check bot latency |
 
+`/delegate` answers cite the official regulations inline (e.g. `[9b1]`) with links to the source text, and each answer opens a thread where follow-up questions keep the conversation context.
+
 ### Add to Your Server
 
-1. Use the [invite link](https://discord.com/oauth2/authorize?client_id=1450571905043267594&permissions=2048&scope=bot) to add the bot
+1. Use the [invite link](https://discord.com/oauth2/authorize?client_id=1450571905043267594&permissions=309237730304&scope=bot%20applications.commands) to add the bot
 2. Select your server (requires **Manage Server** permissions)
-3. Authorize the requested permissions
-4. Type `!wca query` followed by your question in any text channel
+3. Authorize the requested permissions (slash commands, sending messages, embeds, and threads)
+4. Type `/delegate` or `!wca query` followed by your question in any text channel
 
 ## Example Questions
 
@@ -92,13 +95,17 @@ The web interface provides:
 ```
 wca_statbot/
 ├── app.py                  # Flask web application
-├── bot.py                  # Discord bot
-├── config.py               # Configuration management
-├── supervisord.conf        # Multi-process supervisor (web + bot)
+├── config.py               # Configuration management (shared by web + bot)
+├── delegate-bot/           # Discord bot — deployed as its own always-on Fly app
+│   ├── bot.py              # Bot entrypoint (!wca commands + /delegate slash command)
+│   ├── delegate.py         # Embed building + thread conversation history helpers
+│   ├── Dockerfile          # Bot image (built with the repo root as context)
+│   ├── fly.toml            # speedcubemuse-bot app config (no HTTP service; never suspends)
+│   └── requirements.txt    # Bot-only dependencies
 ├── services/
 │   ├── nl_to_sql.py        # Natural language to SQL translation (Claude AI)
 │   ├── wca_api.py          # WCA database query execution and formatting
-│   ├── delegate.py         # Ask a Delegate RAG pipeline (Voyage AI + Claude)
+│   ├── rag.py              # Ask a Delegate RAG pipeline (Voyage AI + Claude)
 │   ├── auth.py             # Supabase authentication helpers
 │   └── saved_queries.py    # Saved query CRUD operations
 ├── templates/
@@ -115,9 +122,9 @@ wca_statbot/
 │   └── test_database.py    # Integration tests for database integrity
 ├── .github/
 │   └── workflows/
-│       └── deploy.yml      # GitHub Actions CI/CD (auto-deploy to Fly.io)
-├── Dockerfile              # Docker container for deployment
-├── fly.toml                # Fly.io configuration
+│       └── deploy.yml      # GitHub Actions CI/CD (auto-deploys both Fly apps)
+├── Dockerfile              # Web app container
+├── fly.toml                # speedcubemuse (web) Fly.io configuration
 ├── requirements.txt        # Python dependencies
 └── .env                    # Environment variables (not in git)
 ```
@@ -192,8 +199,12 @@ python app.py
 ### Run the Discord bot
 
 ```bash
-python bot.py
+pip install -r delegate-bot/requirements.txt
+python delegate-bot/bot.py
 ```
+
+Set `DISCORD_GUILD_ID` in `.env` while developing — slash commands sync to that
+guild instantly instead of waiting for global propagation (~1 hour).
 
 ### Update the database
 
@@ -210,21 +221,34 @@ python -m pytest tests/test_database.py -v
 
 ## Deployment
 
-The app is deployed on [Fly.io](https://fly.io) using Docker. The container runs both the web app and Discord bot via supervisord. Pushes to `main` automatically deploy via GitHub Actions.
+Deployed on [Fly.io](https://fly.io) as **two apps**. Pushes to `main` automatically deploy both via GitHub Actions.
+
+- **`speedcubemuse`** — the Flask web app. Scale-to-zero (`auto_stop_machines = 'suspend'`); web traffic wakes it.
+- **`speedcubemuse-bot`** — the Discord bot. No HTTP service, so the machine never suspends and the bot stays online 24/7. Must run exactly **one** machine (two would open duplicate Discord gateway sessions and answer everything twice).
 
 ```bash
-# Manual deploy
+# Manual deploy — web app
 fly deploy
 
-# Set secrets
-fly secrets set \
+# Manual deploy — bot (run from the repo root; the root is the build context)
+fly deploy . --config delegate-bot/fly.toml --remote-only --ha=false
+
+# Web app secrets
+fly secrets set -a speedcubemuse \
   ANTHROPIC_API_KEY=... \
   VOYAGE_API_KEY=... \
   DB_HOST=... DB_PORT=... DB_USER=... DB_PASSWORD=... DB_NAME=... DB_SSL=true \
   SUPABASE_URL=... SUPABASE_ANON_KEY=... SUPABASE_SERVICE_ROLE_KEY=... \
   WCA_CLIENT_ID=... WCA_CLIENT_SECRET=... WCA_REDIRECT_URI=... \
-  SECRET_KEY=... \
-  DISCORD_TOKEN=...
+  SECRET_KEY=...
+
+# Bot secrets (no DISCORD_GUILD_ID in prod — commands sync globally)
+fly secrets set -a speedcubemuse-bot \
+  DISCORD_TOKEN=... \
+  ANTHROPIC_API_KEY=... \
+  VOYAGE_API_KEY=... \
+  DB_HOST=... DB_PORT=... DB_USER=... DB_PASSWORD=... DB_NAME=... DB_SSL=true \
+  SUPABASE_URL=... SUPABASE_ANON_KEY=...
 ```
 
 ## Security

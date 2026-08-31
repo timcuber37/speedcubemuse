@@ -1,0 +1,20 @@
+# Always-on Discord bot worker. No [http_service]: the bot only holds an
+# outbound gateway WebSocket, and without proxy-managed services the Fly proxy
+# never suspends the machine — it runs 24/7 regardless of web traffic.
+#
+# Keep exactly ONE machine (fly scale count 1): two machines would open two
+# gateway sessions on the same token and answer every command twice.
+
+app = 'speedcubemuse-bot'
+primary_region = 'iad'
+
+[build]
+  dockerfile = 'Dockerfile'  # resolved relative to this file → delegate-bot/Dockerfile
+
+[[restart]]
+  policy = 'always'
+
+[[vm]]
+  memory = '256mb'
+  cpus = 1
+  cpu_kind = 'shared'

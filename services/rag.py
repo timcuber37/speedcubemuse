@@ -137,7 +137,7 @@ class DelegateRAGService:
                 system=_REWRITER_SYSTEM,
                 messages=convo,
             )
-            return resp.content[0].text.strip() or question
+            return self._first_text(resp).strip() or question
         except Exception as e:
             logger.warning("Query rewrite failed, using raw question: %s", e)
             return question
@@ -232,6 +232,11 @@ class DelegateRAGService:
     # ---------------- Helpers ----------------
 
     @staticmethod
+    def _first_text(resp) -> str:
+        """Text of the first text block; responses may lead with thinking blocks."""
+        return next((b.text for b in resp.content if b.type == 'text'), '')
+
+    @staticmethod
     def _parent_id(reg_id: str) -> Optional[str]:
         """Strip the last group of letters or digits to get the parent ID."""
         base = reg_id.rstrip('+')
@@ -282,9 +287,10 @@ class DelegateRAGService:
 
         resp = self.anthropic.messages.create(
             model=self.model,
-            max_tokens=1024,
-            temperature=0.2,
+            # Headroom for adaptive thinking (on by default for current models),
+            # which counts against max_tokens alongside the visible answer.
+            max_tokens=2048,
             system=system,
             messages=messages,
         )
-        return resp.content[0].text.strip()
+        return self._first_text(resp).strip()
