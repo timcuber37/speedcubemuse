@@ -10,10 +10,18 @@ refresh reaches the site with no commit or redeploy. This also means the
 "already up to date" check works on a fresh CI runner, where the local
 .last_export_date file doesn't exist.
 
+Tables are bulk-loaded with LOAD DATA LOCAL INFILE, measured at ~8x the speed of
+the batched INSERTs it replaced (200k rows: 48.3s -> 5.7s). The tradeoff is that MySQL's LOCAL protocol can't
+abort mid-stream, so the server coerces a value its column type rejects (a
+non-numeric int becomes 0) instead of raising. Rows with the wrong column count
+are still dropped during staging, and --no-fast-load restores the strict
+row-by-row path, which is also the automatic fallback if LOAD DATA errors.
+
 Usage:
-    python scripts/update_database.py               # skip if already up to date
-    python scripts/update_database.py --force       # reload regardless
-    python scripts/update_database.py --patch-repo  # also rewrite README stats
+    python scripts/update_database.py                 # skip if already up to date
+    python scripts/update_database.py --force         # reload regardless
+    python scripts/update_database.py --patch-repo    # also rewrite README stats
+    python scripts/update_database.py --no-fast-load  # strict row-by-row load
 """
 import argparse
 import io
@@ -22,6 +30,7 @@ import os
 import re
 import ssl
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -46,6 +55,21 @@ STATE_FILE = _HERE / ".last_export_date"
 # Rows per INSERT batch — large enough to be fast, small enough to avoid timeouts
 BATCH_SIZE = 500
 
+# Size of one LOAD DATA statement. TiDB runs each as a single transaction, so
+# these bound the server-side memory it needs and how long the client holds the
+# socket streaming into it.
+#
+# Both limits are needed, because they catch different shapes of table. Bytes
+# alone is not enough: TiDB's memory use tracks row count, not payload size, and
+# a narrow table like result_attempts (int, tinyint, bigint) packs ~2.5M rows
+# into 64 MB where a wide one like results packs ~760k. The wide case loaded
+# fine; the narrow one exceeded tidb_server_memory_limit and was cancelled.
+LOAD_CHUNK_BYTES = 64 * 1024 * 1024
+LOAD_CHUNK_ROWS = 500_000
+
+# Divisor applied to both limits when a chunk fails and the table is retried.
+LOAD_RETRY_SHRINK = 4
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -67,6 +91,10 @@ def get_connection() -> pymysql.Connection:
         database=DB_NAME,
         charset='utf8mb4',
         autocommit=False,
+        # Required for the LOAD DATA LOCAL INFILE fast path. The server side is
+        # already enabled (@@local_infile = 1 on TiDB Serverless); this opts the
+        # client in. Harmless when the fast path isn't used.
+        local_infile=True,
         **kwargs,
     )
 
@@ -161,8 +189,175 @@ def _flush(conn, insert_sql: str, batch: list, table: str) -> None:
 # Per-table loader
 # ---------------------------------------------------------------------------
 
-def load_table(conn: pymysql.Connection, table: str,
-               tsv_bytes: bytes, create_sql: str | None) -> None:
+def _stage_tsv(zf: zipfile.ZipFile, fname: str, tmpdir: Path,
+               max_bytes: int | None = None,
+               max_rows: int | None = None) -> tuple[list[Path], list[str], int, int]:
+    """Stream one TSV member out of the zip onto disk, ready for LOAD DATA.
+
+    Returns (parts, columns, rows, skipped). Everything is done in bytes and
+    streamed a line at a time: the export's biggest table is well over a
+    gigabyte uncompressed, and reading it whole is what used to dominate this
+    script's memory use.
+
+    The staged files strip the header, normalise CRLF to LF, and drop rows whose
+    column count is wrong. That last check matters more than it used to: the
+    row-by-row path rejected a short row outright, whereas LOAD DATA would
+    quietly pad it with NULLs.
+
+    Output is split into parts bounded by both max_bytes and max_rows, because
+    TiDB runs each LOAD DATA as a single transaction (tidb_dml_batch_size = 0)
+    and a whole big table at once exhausts its memory limits. See the notes on
+    LOAD_CHUNK_BYTES for why one limit alone doesn't cover it.
+    """
+    # Resolved here rather than as default arguments so the limits stay
+    # overridable at runtime (defaults would freeze them at import time).
+    max_bytes = LOAD_CHUNK_BYTES if max_bytes is None else max_bytes
+    max_rows = LOAD_CHUNK_ROWS if max_rows is None else max_rows
+
+    base = Path(fname).name
+    parts: list[Path] = []
+    rows = skipped = 0
+
+    def _next_part():
+        path = tmpdir / f'{base}.{len(parts):03d}.staged'
+        parts.append(path)
+        return open(path, 'wb', buffering=1 << 20)
+
+    with zf.open(fname) as src:
+        header = src.readline()
+        if header.startswith(b'\xef\xbb\xbf'):   # utf-8-sig BOM
+            header = header[3:]
+        columns = header.rstrip(b'\r\n').decode('utf-8').split('\t')
+        n_tabs = len(columns) - 1
+
+        dst = _next_part()
+        written = 0
+        part_rows = 0
+        try:
+            # Plain tab-splitting, not csv.reader — WCA TSV files are unquoted,
+            # and csv's default quoting misaligns columns when a name contains a
+            # double quote (e.g. John "Johnny" Smith).
+            for line in src:
+                line = line.rstrip(b'\r\n')
+                if not line:
+                    continue
+                if line.count(b'\t') != n_tabs:
+                    skipped += 1
+                    continue
+                if written >= max_bytes or part_rows >= max_rows:
+                    dst.close()
+                    dst = _next_part()
+                    written = part_rows = 0
+                dst.write(line)
+                dst.write(b'\n')
+                written += len(line) + 1
+                part_rows += 1
+                rows += 1
+        finally:
+            dst.close()
+
+    return parts, columns, rows, skipped
+
+
+def _load_via_infile(conn: pymysql.Connection, table: str,
+                     path: Path, columns: list[str]) -> int:
+    """Bulk-load a staged TSV with LOAD DATA LOCAL INFILE. Returns rows loaded."""
+    variables = ', '.join(f'@v{i}' for i in range(len(columns)))
+    # Every field is read into a user variable first so NULLs can be recognised:
+    # v1 exports wrote \N, v2 exports write the literal string 'NULL'. ESCAPED BY ''
+    # keeps backslashes inside names intact, which means \N has to be matched here
+    # rather than left to the server's own escape processing.
+    set_clause = ', '.join(
+        f"`{c}` = NULLIF(NULLIF(@v{i}, 'NULL'), '\\\\N')"
+        for i, c in enumerate(columns)
+    )
+    sql = (
+        f"LOAD DATA LOCAL INFILE {conn.escape(str(path))} "
+        f"INTO TABLE `{table}` CHARACTER SET utf8mb4 "
+        f"FIELDS TERMINATED BY '\\t' ESCAPED BY '' "
+        f"LINES TERMINATED BY '\\n' "
+        f"({variables}) SET {set_clause}"
+    )
+    cur = conn.cursor()
+    try:
+        cur.execute(sql)
+        conn.commit()
+        return cur.rowcount
+    finally:
+        cur.close()
+
+
+def _load_all_parts(conn: pymysql.Connection, table: str,
+                    parts: list[Path], columns: list[str]) -> int:
+    total = 0
+    for i, part in enumerate(parts, 1):
+        total += _load_via_infile(conn, table, part, columns)
+        if len(parts) > 1:
+            log.info("  %s: chunk %d/%d — %d rows loaded", table, i, len(parts), total)
+    return total
+
+
+def _insert_from_files(conn: pymysql.Connection, table: str,
+                       parts: list[Path], columns: list[str]) -> int:
+    """Row-by-row fallback: batched INSERTs from the staged TSV. Returns rows loaded.
+
+    Roughly 8x slower than LOAD DATA, but it reports per-row errors, so a value
+    the column type rejects is skipped and logged rather than coerced.
+    """
+    col_list = ', '.join(f'`{c}`' for c in columns)
+    placeholders = ', '.join(['%s'] * len(columns))
+    insert_sql = f'INSERT INTO `{table}` ({col_list}) VALUES ({placeholders})'
+
+    batch: list[list] = []
+    total = 0
+    for part in parts:
+        with open(part, 'rb') as f:
+            for line in f:
+                row = line.rstrip(b'\n').decode('utf-8', errors='replace').split('\t')
+                batch.append([None if v in (r'\N', 'NULL') else v for v in row])
+                total += 1
+                if len(batch) >= BATCH_SIZE:
+                    _flush(conn, insert_sql, batch, table)
+                    batch = []
+                    if total % 500_000 == 0:
+                        log.info("  %s: %d rows loaded...", table, total)
+
+    if batch:
+        _flush(conn, insert_sql, batch, table)
+    return total
+
+
+def _reset_table(conn: pymysql.Connection, table: str) -> None:
+    """Reconnect if the socket died, then empty the table so a retry can't double up.
+
+    A LOAD DATA that exceeds the server's limits can be killed mid-transfer,
+    which leaves the connection unusable — every later statement would fail
+    until it is re-established. Reconnecting on the same object keeps the
+    caller's handle valid for the rest of the run.
+    """
+    if not conn.open:
+        conn.connect()
+    else:
+        try:
+            conn.rollback()
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            conn.connect()
+
+    cur = conn.cursor()
+    try:
+        cur.execute(f"TRUNCATE TABLE `{table}`")
+        conn.commit()
+    finally:
+        cur.close()
+
+
+def load_table(conn: pymysql.Connection, table: str, zf: zipfile.ZipFile,
+               fname: str, create_sql: str | None, tmpdir: Path,
+               fast_load: bool = True) -> None:
     cur = conn.cursor()
 
     if create_sql:
@@ -177,44 +372,50 @@ def load_table(conn: pymysql.Connection, table: str,
             log.warning("  Table %s does not exist and no schema available — skipping", table)
             cur.close()
             return
+    cur.close()
 
-    # Parse TSV with plain tab-splitting — WCA TSV files are unquoted, and using
-    # csv.reader's default quoting causes column misalignment when names contain
-    # double-quote characters (e.g. John "Johnny" Smith).
-    wrapper = io.TextIOWrapper(io.BytesIO(tsv_bytes), encoding='utf-8-sig')
-    lines = iter(wrapper)
+    parts, columns, rows, skipped = _stage_tsv(zf, fname, tmpdir)
+    try:
+        loaded = None
+        # Two goes at the fast path before falling back. The retry re-stages
+        # into smaller chunks, since the usual reason for failure is a chunk the
+        # server hasn't got the memory for, and that is a property of the table
+        # rather than bad luck. Catch Exception rather than DatabaseError — when
+        # the server kills the connection mid-transfer, pymysql's own error
+        # handling raises AttributeError on the dead socket.
+        for attempt in (1, 2) if fast_load else ():
+            try:
+                loaded = _load_all_parts(conn, table, parts, columns)
+                break
+            except Exception as e:
+                log.warning("  LOAD DATA failed for %s (attempt %d/2): %s: %s",
+                            table, attempt, type(e).__name__, e)
+                # A failed chunk may have committed rows, so start the table over.
+                _reset_table(conn, table)
+                if attempt == 1:
+                    for part in parts:
+                        part.unlink(missing_ok=True)
+                    log.info("  %s: re-staging with %dx smaller chunks",
+                             table, LOAD_RETRY_SHRINK)
+                    parts, columns, rows, skipped = _stage_tsv(
+                        zf, fname, tmpdir,
+                        max_bytes=LOAD_CHUNK_BYTES // LOAD_RETRY_SHRINK,
+                        max_rows=LOAD_CHUNK_ROWS // LOAD_RETRY_SHRINK,
+                    )
 
-    columns = next(lines).rstrip('\r\n').split('\t')
-    col_list = ', '.join(f'`{c}`' for c in columns)
-    placeholders = ', '.join(['%s'] * len(columns))
-    insert_sql = f'INSERT INTO `{table}` ({col_list}) VALUES ({placeholders})'
-    n_cols = len(columns)
-
-    batch: list[list] = []
-    total = 0
-    skipped = 0
-
-    for line in lines:
-        row = line.rstrip('\r\n').split('\t')
-        if len(row) != n_cols:
-            skipped += 1
-            continue
-        # v1 exports used \N for NULL; v2 exports use the literal string 'NULL'
-        batch.append([None if v in (r'\N', 'NULL') else v for v in row])
-        total += 1
-        if len(batch) >= BATCH_SIZE:
-            _flush(conn, insert_sql, batch, table)
-            batch = []
-            if total % 500_000 == 0:
-                log.info("  %s: %d rows loaded...", table, total)
-
-    if batch:
-        _flush(conn, insert_sql, batch, table)
+        if loaded is None:
+            if fast_load:
+                log.warning("  %s: falling back to row-by-row INSERT", table)
+            loaded = _insert_from_files(conn, table, parts, columns)
+    finally:
+        for part in parts:
+            part.unlink(missing_ok=True)
 
     if skipped:
         log.warning("  %s: skipped %d malformed rows", table, skipped)
-    log.info("  %s: done (%d rows)", table, total)
-    cur.close()
+    if loaded != rows:
+        log.warning("  %s: loaded %d rows but staged %d", table, loaded, rows)
+    log.info("  %s: done (%d rows)", table, loaded)
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +444,7 @@ def last_loaded_export_date() -> str:
     return STATE_FILE.read_text().strip() if STATE_FILE.exists() else ''
 
 
-def run(force: bool = False, patch_repo: bool = False) -> None:
+def run(force: bool = False, patch_repo: bool = False, fast_load: bool = True) -> None:
     # Check for a newer export
     log.info("Fetching export metadata from WCA API...")
     meta_resp = requests.get(WCA_EXPORT_API, timeout=30)
@@ -290,17 +491,23 @@ def run(force: bool = False, patch_repo: bool = False) -> None:
             else:
                 log.warning("No .sql file found inside SQL zip")
 
-    # Load each TSV into TiDB
+    # Load each TSV into TiDB. Tables are staged to disk one at a time and the
+    # staged file is deleted straight after, so peak disk use is the largest
+    # single table rather than the whole export.
+    log.info("Bulk load mode: %s", 'LOAD DATA LOCAL INFILE' if fast_load else 'batched INSERT')
     conn = get_connection()
     try:
-        with zipfile.ZipFile(io.BytesIO(tsv_zip)) as z:
-            tsv_files = sorted(n for n in z.namelist() if n.endswith('.tsv'))
-            log.info("Found %d TSV files", len(tsv_files))
-            for fname in tsv_files:
-                table = table_name_from_tsv(fname)
-                if not table:
-                    continue
-                load_table(conn, table, z.read(fname), create_stmts.get(table))
+        with tempfile.TemporaryDirectory(prefix='wca-export-') as tmp:
+            tmpdir = Path(tmp)
+            with zipfile.ZipFile(io.BytesIO(tsv_zip)) as z:
+                tsv_files = sorted(n for n in z.namelist() if n.endswith('.tsv'))
+                log.info("Found %d TSV files", len(tsv_files))
+                for fname in tsv_files:
+                    table = table_name_from_tsv(fname)
+                    if not table:
+                        continue
+                    load_table(conn, table, z, fname, create_stmts.get(table),
+                               tmpdir, fast_load=fast_load)
     finally:
         conn.close()
 
@@ -384,5 +591,9 @@ if __name__ == '__main__':
     parser.add_argument('--patch-repo', action='store_true',
                         help='Also rewrite the stats table in README.md (local runs only; '
                              'the site itself reads from site_meta)')
+    parser.add_argument('--no-fast-load', action='store_true',
+                        help='Load with batched INSERTs instead of LOAD DATA LOCAL INFILE: '
+                             'about 8x slower, but rejects and logs bad rows individually '
+                             'rather than letting the server coerce them')
     args = parser.parse_args()
-    run(force=args.force, patch_repo=args.patch_repo)
+    run(force=args.force, patch_repo=args.patch_repo, fast_load=not args.no_fast_load)

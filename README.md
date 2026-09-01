@@ -213,10 +213,23 @@ guild instantly instead of waiting for global propagation (~1 hour).
 Runs weekly on its own (see [Deployment](#deployment)); these are for running it by hand:
 
 ```bash
-python scripts/update_database.py               # skip if already up to date
-python scripts/update_database.py --force       # reload regardless
-python scripts/update_database.py --patch-repo  # also rewrite the stats table above
+python scripts/update_database.py                 # skip if already up to date
+python scripts/update_database.py --force         # reload regardless
+python scripts/update_database.py --patch-repo    # also rewrite the stats table above
+python scripts/update_database.py --no-fast-load  # strict row-by-row load
 ```
+
+Tables are bulk-loaded with `LOAD DATA LOCAL INFILE`, ~8x faster than batched
+INSERTs (200k rows: 48.3s → 5.7s). Each statement is capped at both 64 MB and
+500k rows (`LOAD_CHUNK_BYTES` / `LOAD_CHUNK_ROWS`) — TiDB runs one as a single
+transaction, and exceeding its memory limit gets the query cancelled. Both caps
+are needed: wide tables hit the byte limit first, narrow ones like
+`result_attempts` hit the row limit. A failed chunk re-stages 4x smaller and
+retries once before falling back. Because MySQL's LOCAL protocol can't abort
+mid-stream, the server coerces a value its column type rejects (a non-numeric
+int becomes `0`) rather than raising; rows with the wrong column count are still
+dropped during staging. `--no-fast-load` restores the strict row-by-row path,
+which is also the automatic fallback if `LOAD DATA` errors.
 
 The freshness check reads the last-loaded export date from the `site_meta` table,
 falling back to the local `scripts/.last_export_date` file.

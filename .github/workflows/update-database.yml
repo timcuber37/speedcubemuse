@@ -23,10 +23,12 @@ jobs:
   update:
     name: Reload TiDB from the WCA export
     runs-on: ubuntu-latest
-    # A full reload of ~6.8M result rows takes hours of batched INSERTs over
-    # the network. GitHub's hard cap is 6h; stop short so the failure
-    # notification below still gets to run.
-    timeout-minutes: 330
+    # Bulk loading via LOAD DATA LOCAL INFILE puts a full reload in the
+    # tens-of-minutes range (the 6.8M-row results table measured ~3 min).
+    # This leaves generous room for the download plus a fall back to the
+    # ~8x slower row-by-row path, while still failing well inside GitHub's
+    # 6h cap so the notification below gets to run.
+    timeout-minutes: 180
     env:
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
