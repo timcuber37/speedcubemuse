@@ -66,24 +66,14 @@
 
             <section class="about-section">
                 <h2>Database</h2>
-                <p>The app queries a database populated from the official <a href="https://www.worldcubeassociation.org/export/results" target="_blank" rel="noopener">WCA data export</a> (August 2, 2026), containing:</p>
+                <p>The app queries a database populated from the official <a href="https://www.worldcubeassociation.org/export/results" target="_blank" rel="noopener">WCA data export</a> ({{ db_meta.export_date_display }}), containing:</p>
                 <div class="stats-grid">
+                    {% for label, count in db_meta.stats %}
                     <div class="stat-card">
-                        <span class="stat-number">293,935</span>
-                        <span class="stat-label">Competitors</span>
+                        <span class="stat-number">{{ count }}</span>
+                        <span class="stat-label">{{ label }}</span>
                     </div>
-                    <div class="stat-card">
-                        <span class="stat-number">6,764,347</span>
-                        <span class="stat-label">Results</span>
-                    </div>
-                    <div class="stat-card">
-                        <span class="stat-number">18,280</span>
-                        <span class="stat-label">Competitions</span>
-                    </div>
-                    <div class="stat-card">
-                        <span class="stat-number">17</span>
-                        <span class="stat-label">Events</span>
-                    </div>
+                    {% endfor %}
                 </div>
             </section>
 

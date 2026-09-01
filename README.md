@@ -26,7 +26,7 @@ The app queries a database populated from the official [WCA data export](https:/
 | Competitions | 18,280 |
 | Events | 17 |
 
-The database is updated using `scripts/update_database.py`, which downloads the latest WCA export, reloads all tables, and automatically patches the stat numbers and export date in the about page.
+The database is refreshed automatically every Monday by the `Weekly WCA database refresh` GitHub Action, which runs `scripts/update_database.py` to download the latest WCA export and reload all tables. The script records the export date and row counts in a `site_meta` table that the home and About pages read at render time, so a refresh reaches the site with no commit or redeploy.
 
 ## Tech Stack
 
@@ -107,7 +107,8 @@ wca_statbot/
 │   ├── wca_api.py          # WCA database query execution and formatting
 │   ├── rag.py              # Ask a Delegate RAG pipeline (Voyage AI + Claude)
 │   ├── auth.py             # Supabase authentication helpers
-│   └── saved_queries.py    # Saved query CRUD operations
+│   ├── saved_queries.py    # Saved query CRUD operations
+│   └── site_meta.py        # DB-backed export date + stats shown on the site
 ├── templates/
 │   ├── index.html          # Main query page
 │   ├── about.html          # About page
@@ -122,7 +123,8 @@ wca_statbot/
 │   └── test_database.py    # Integration tests for database integrity
 ├── .github/
 │   └── workflows/
-│       └── deploy.yml      # GitHub Actions CI/CD (auto-deploys both Fly apps)
+│       ├── deploy.yml            # CI/CD (auto-deploys both Fly apps on push)
+│       └── update-database.yml   # Weekly WCA export refresh (Mondays 09:00 UTC)
 ├── Dockerfile              # Web app container
 ├── fly.toml                # speedcubemuse (web) Fly.io configuration
 ├── requirements.txt        # Python dependencies
@@ -208,10 +210,16 @@ guild instantly instead of waiting for global propagation (~1 hour).
 
 ### Update the database
 
+Runs weekly on its own (see [Deployment](#deployment)); these are for running it by hand:
+
 ```bash
-python scripts/update_database.py           # skip if already up to date
-python scripts/update_database.py --force   # reload regardless
+python scripts/update_database.py               # skip if already up to date
+python scripts/update_database.py --force       # reload regardless
+python scripts/update_database.py --patch-repo  # also rewrite the stats table above
 ```
+
+The freshness check reads the last-loaded export date from the `site_meta` table,
+falling back to the local `scripts/.last_export_date` file.
 
 ### Run database integrity tests
 
@@ -250,6 +258,25 @@ fly secrets set -a speedcubemuse-bot \
   DB_HOST=... DB_PORT=... DB_USER=... DB_PASSWORD=... DB_NAME=... DB_SSL=true \
   SUPABASE_URL=... SUPABASE_ANON_KEY=...
 ```
+
+### Weekly database refresh
+
+`.github/workflows/update-database.yml` reloads the WCA export every Monday at
+09:00 UTC (also runnable on demand from the Actions tab, with an optional
+`force` input). It writes only to TiDB — no commit, no redeploy — because the
+site reads its stats from the `site_meta` table at render time.
+
+Required repository secrets: `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`
+(plus optional `DB_PORT`, defaulting to `4000`, and `DISCORD_WEBHOOK_URL` to get
+a ping when a run fails).
+
+```bash
+gh secret set DB_HOST      # etc.
+```
+
+Two notes on GitHub's scheduler: cron runs can be delayed when the platform is
+busy, and schedules are disabled automatically after 60 days of repository
+inactivity.
 
 ## Security
 

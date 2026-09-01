@@ -1,0 +1,65 @@
+name: Weekly WCA database refresh
+
+on:
+  schedule:
+    # Mondays 09:00 UTC. The WCA publishes a new export roughly weekly
+    # (Sunday/Monday); if there isn't a newer one the script exits early.
+    # GitHub may delay scheduled runs under load, and disables schedules
+    # entirely after 60 days with no repo activity.
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Reload even if the database is already on the latest export'
+        type: boolean
+        default: false
+
+# Two reloads must never overlap — they drop and recreate the same tables.
+concurrency:
+  group: wca-db-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Reload TiDB from the WCA export
+    runs-on: ubuntu-latest
+    # A full reload of ~6.8M result rows takes hours of batched INSERTs over
+    # the network. GitHub's hard cap is 6h; stop short so the failure
+    # notification below still gets to run.
+    timeout-minutes: 330
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Deliberately not requirements.txt: the reload only needs a database
+      # driver and an HTTP client. Installing the app's full dependency set
+      # would let an unrelated package break the weekly refresh.
+      - name: Install dependencies
+        run: pip install PyMySQL cryptography requests certifi python-dotenv
+
+      - name: Reload WCA export into TiDB
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT || '4000' }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_SSL: 'true'
+        # On success the script writes the new stats to the `site_meta` table,
+        # which the web app reads at render time — no commit or redeploy needed.
+        run: python scripts/update_database.py ${{ inputs.force && '--force' || '' }}
+
+      - name: Notify Discord on failure
+        if: failure() && env.DISCORD_WEBHOOK_URL != ''
+        run: |
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -sS -X POST "$DISCORD_WEBHOOK_URL" \
+            -H 'Content-Type: application/json' \
+            --data "$(jq -n --arg url "$run_url" \
+              '{content: ("⚠️ SpeedCubeMuse weekly database refresh failed: " + $url)}')"

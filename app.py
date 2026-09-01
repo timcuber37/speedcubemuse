@@ -25,6 +25,7 @@ from services.nl_to_sql import NLToSQLService
 from services.wca_api import WCAService
 from services.auth import get_user_from_token, find_or_create_wca_user, generate_wca_login_link
 from services.rag import DelegateRAGService
+from services.site_meta import get_site_meta
 from services import saved_queries
 
 _WCA_AUTH_URL = "https://www.worldcubeassociation.org/oauth/authorize"
@@ -100,7 +101,8 @@ def set_security_headers(response):
 def index():
     return render_template('index.html',
                            supabase_url=SUPABASE_URL,
-                           supabase_anon_key=SUPABASE_ANON_KEY)
+                           supabase_anon_key=SUPABASE_ANON_KEY,
+                           db_meta=get_site_meta())
 
 
 @app.route('/about')
@@ -108,7 +110,8 @@ def index():
 def about():
     return render_template('about.html',
                            supabase_url=SUPABASE_URL,
-                           supabase_anon_key=SUPABASE_ANON_KEY)
+                           supabase_anon_key=SUPABASE_ANON_KEY,
+                           db_meta=get_site_meta())
 
 
 @app.route('/login')
