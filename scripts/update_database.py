@@ -41,10 +41,14 @@ from dotenv import load_dotenv
 
 _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent))
+# scripts/ itself, so the sibling build_cuber_profiles import below resolves
+# whether this file is run directly or imported.
+sys.path.insert(0, str(_HERE))
 load_dotenv()
 
 from config import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, DB_SSL
 from services import site_meta
+import build_cuber_profiles
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
 log = logging.getLogger(__name__)
@@ -444,7 +448,8 @@ def last_loaded_export_date() -> str:
     return STATE_FILE.read_text().strip() if STATE_FILE.exists() else ''
 
 
-def run(force: bool = False, patch_repo: bool = False, fast_load: bool = True) -> None:
+def run(force: bool = False, patch_repo: bool = False, fast_load: bool = True,
+        build_profiles: bool = True) -> None:
     # Check for a newer export
     log.info("Fetching export metadata from WCA API...")
     meta_resp = requests.get(WCA_EXPORT_API, timeout=30)
@@ -517,6 +522,17 @@ def run(force: bool = False, patch_repo: bool = False, fast_load: bool = True) -
 
     # Query stats and publish them to the site
     print_and_update_stats(export_date, patch_repo=patch_repo)
+
+    # Rebuild the Guess the Cuber feature matrix from the data just loaded.
+    # Isolated in its own try: the reload itself has already succeeded and been
+    # recorded by this point, so a failure here should leave the site serving
+    # fresh WCA data with a stale game pool rather than fail the whole job.
+    if build_profiles:
+        try:
+            log.info("Rebuilding cuber_profiles for Guess the Cuber...")
+            build_cuber_profiles.run()
+        except Exception as e:
+            log.error("cuber_profiles rebuild failed (WCA data is still loaded): %s", e)
 
 
 def print_and_update_stats(export_date: str, patch_repo: bool = False) -> None:
@@ -595,5 +611,9 @@ if __name__ == '__main__':
                         help='Load with batched INSERTs instead of LOAD DATA LOCAL INFILE: '
                              'about 8x slower, but rejects and logs bad rows individually '
                              'rather than letting the server coerce them')
+    parser.add_argument('--skip-profiles', action='store_true',
+                        help='Skip rebuilding the Guess the Cuber feature matrix '
+                             '(scripts/build_cuber_profiles.py runs it standalone)')
     args = parser.parse_args()
-    run(force=args.force, patch_repo=args.patch_repo, fast_load=not args.no_fast_load)
+    run(force=args.force, patch_repo=args.patch_repo, fast_load=not args.no_fast_load,
+        build_profiles=not args.skip_profiles)

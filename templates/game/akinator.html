@@ -1,0 +1,241 @@
+{% extends "game/_base.html" %}
+{% block title %}I'll guess yours{% endblock %}
+
+{% block content %}
+<div class="game-header">
+    <h1>I'll guess yours</h1>
+    <p class="subtitle">Think of a competitor, then answer honestly. Not sure? Say so &mdash; it's allowed.</p>
+</div>
+
+<div id="setup" class="game-panel">
+    <label class="game-label" for="difficulty">Difficulty</label>
+    <select id="difficulty" class="game-select">
+        <option value="easy">Easy &mdash; 300 best-known competitors</option>
+        <option value="normal" selected>Normal &mdash; 1,000 competitors</option>
+        <option value="hard">Hard &mdash; every record holder and world top 100</option>
+        <option value="everyone">Everyone &mdash; any competitor with 5+ competitions</option>
+    </select>
+    <button id="start-btn" class="game-btn game-btn-primary">Start</button>
+</div>
+
+<div id="play" class="game-panel hidden">
+    <div class="game-progress">
+        <span id="progress-text"></span>
+        <button id="restart-btn" class="game-btn-link">Start over</button>
+    </div>
+
+    <div id="question-box" class="question-box"></div>
+
+    <div id="answer-buttons" class="answer-grid"></div>
+</div>
+
+<div id="result" class="game-panel hidden"></div>
+
+{# Outside #play and #result on purpose: both of those get hidden as the game
+   moves on, and the history has to outlive them so it is still there to read
+   once the game is over. #}
+<details id="history-wrap" class="game-history hidden">
+    <summary><span id="history-label">Your answers so far</span></summary>
+    <ol id="history"></ol>
+</details>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // The whole game state. It is deliberately client-side: the app has nothing
+    // to hide in this mode (the cuber is in your head), and the server replays
+    // this log on each turn rather than holding a session — the two Gunicorn
+    // workers don't share memory and the machine suspends when idle.
+    let answers = [];
+    let rejected = [];
+    let difficulty = 'normal';
+    let busy = false;
+
+    const ANSWER_LABELS = {
+        yes: 'Yes',
+        probably: 'Probably',
+        dont_know: "Don't know",
+        probably_not: 'Probably not',
+        no: 'No',
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    function show(id) { $(id).classList.remove('hidden'); }
+    function hide(id) { $(id).classList.add('hidden'); }
+
+    async function turn() {
+        if (busy) return;
+        busy = true;
+        $('answer-buttons').innerHTML = '<div class="game-thinking">Thinking…</div>';
+
+        const data = await postJSON('/api/game/akinator/turn', {
+            difficulty, answers, rejected,
+        });
+        busy = false;
+
+        if (data.error && !data.guess) {
+            $('question-box').innerHTML = `<p class="game-error">${esc(data.error)}</p>`;
+            $('answer-buttons').innerHTML = '';
+            return;
+        }
+
+        if (data.done) return renderGuess(data);
+        renderQuestion(data);
+    }
+
+    function renderQuestion(data) {
+        // No "of 75" here. The cap is a ceiling almost no game reaches — most
+        // end on confidence around question 13 — so showing it would promise a
+        // far longer game than you're actually going to play. The candidate
+        // count is the number that genuinely tracks progress.
+        const left = data.remaining === 1
+            ? '1 possible' : `${data.remaining.toLocaleString()} possible`;
+        $('progress-text').textContent = `Question ${data.asked + 1} · ${left}`;
+        $('question-box').innerHTML = `<h2>${esc(data.question.text)}</h2>`;
+
+        $('answer-buttons').innerHTML = data.answers.map(a =>
+            `<button class="answer-btn answer-${esc(a)}" data-answer="${esc(a)}">${esc(ANSWER_LABELS[a] || a)}</button>`
+        ).join('');
+
+        $('answer-buttons').querySelectorAll('.answer-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                answers.push({ id: data.question.id, answer: btn.dataset.answer });
+                addHistory(data.question.text, ANSWER_LABELS[btn.dataset.answer]);
+                turn();
+            });
+        });
+    }
+
+    function addHistory(question, answer) {
+        show('history-wrap');
+        const li = document.createElement('li');
+        li.innerHTML = `${esc(question)} <strong>${esc(answer)}</strong>`;
+        $('history').appendChild(li);
+    }
+
+    function revealHistory(label) {
+        // Open it on the way out: mid-game it is a collapsed aside, but once
+        // the game is over it is the thing people actually want to look at.
+        $('history-label').textContent = label;
+        $('history-wrap').open = true;
+        show('history-wrap');
+    }
+
+    function renderGuess(data) {
+        hide('play');
+        show('result');
+        revealHistory(`The ${data.asked} questions I asked`);
+
+        if (!data.guess) {
+            $('result').innerHTML = `
+                <p class="game-error">${esc(data.error || 'I ran out of candidates.')}</p>
+                <button class="game-btn game-btn-primary" onclick="location.reload()">Try again</button>`;
+            return;
+        }
+
+        // Not confident enough to name one: the search stalled with several
+        // near-identical candidates left, which happens often on the larger
+        // pools. A shortlist is an honest ending; a confident wrong name isn't.
+        if (!data.confident && (data.alternatives || []).length) {
+            return renderShortlist(data);
+        }
+
+        const g = data.guess;
+        const pct = Math.round((g.confidence || 0) * 100);
+        $('result').innerHTML = `
+            <div class="guess-card">
+                <p class="guess-lead">After ${esc(data.asked)} questions, I think it's…</p>
+                <div class="avatar-slot" id="guess-avatar"></div>
+                <h2 class="guess-name">${esc(g.name)}</h2>
+                <p class="guess-meta">${esc(g.country)} · ${pct}% confident</p>
+                <a href="${esc(g.wca_url)}" target="_blank" rel="noopener" class="guess-link">WCA profile &rarr;</a>
+                <div class="guess-actions">
+                    <button id="right-btn" class="game-btn game-btn-primary">That's them</button>
+                    <button id="wrong-btn" class="game-btn">Not quite</button>
+                </div>
+            </div>`;
+        mountAvatar($('guess-avatar'), g.wca_id, g.name);
+
+        $('right-btn').addEventListener('click', () => {
+            $('result').innerHTML = `
+                <div class="guess-card">
+                    <h2>Got it.</h2>
+                    <div class="avatar-slot" id="won-avatar"></div>
+                    <p class="guess-meta">${esc(g.name)} in ${esc(data.asked)} questions.</p>
+                    <button class="game-btn game-btn-primary" onclick="location.reload()">Play again</button>
+                </div>`;
+            mountAvatar($('won-avatar'), g.wca_id, g.name);
+        });
+
+        // A rejection is certain, unlike an answer — the server eliminates that
+        // candidate outright and keeps going with what's left.
+        $('wrong-btn').addEventListener('click', () => {
+            rejected.push(g.wca_id);
+            hide('result');
+            show('play');
+            // Back to mid-game, so the history returns to being a collapsed aside.
+            $('history-label').textContent = 'Your answers so far';
+            $('history-wrap').open = false;
+            turn();
+        });
+    }
+
+    function renderShortlist(data) {
+        const options = [data.guess, ...(data.alternatives || [])];
+        $('result').innerHTML = `
+            <div class="guess-card">
+                <p class="guess-lead">
+                    After ${esc(data.asked)} questions I can't separate these.
+                    Is it one of them?
+                </p>
+                <div class="shortlist">
+                    ${options.map(o => `
+                        <button class="shortlist-option" data-id="${esc(o.wca_id)}">
+                            <span class="shortlist-name">${esc(o.name)}</span>
+                            <span class="shortlist-meta">${esc(o.country)} · ${Math.round((o.confidence || 0) * 100)}%</span>
+                        </button>`).join('')}
+                </div>
+                <button id="none-btn" class="game-btn">None of these</button>
+            </div>`;
+
+        $('result').querySelectorAll('.shortlist-option').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const picked = options.find(o => o.wca_id === btn.dataset.id);
+                $('result').innerHTML = `
+                    <div class="guess-card">
+                        <h2>Got it.</h2>
+                        <div class="avatar-slot" id="picked-avatar"></div>
+                        <h3 class="guess-name">${esc(picked.name)}</h3>
+                        <p class="guess-meta">${esc(picked.country)} · ${esc(data.asked)} questions</p>
+                        <a href="${esc(picked.wca_url)}" target="_blank" rel="noopener" class="guess-link">WCA profile &rarr;</a>
+                        <div class="guess-actions">
+                            <button class="game-btn game-btn-primary" onclick="location.reload()">Play again</button>
+                        </div>
+                    </div>`;
+                mountAvatar($('picked-avatar'), picked.wca_id, picked.name);
+            });
+        });
+
+        // Rejecting the whole shortlist is strong evidence — eliminate all of
+        // them and let the search carry on with what's left.
+        $('none-btn').addEventListener('click', () => {
+            options.forEach(o => rejected.push(o.wca_id));
+            hide('result');
+            show('play');
+            $('history-label').textContent = 'Your answers so far';
+            $('history-wrap').open = false;
+            turn();
+        });
+    }
+
+    $('start-btn').addEventListener('click', () => {
+        difficulty = $('difficulty').value;
+        hide('setup');
+        show('play');
+        turn();
+    });
+
+    $('restart-btn').addEventListener('click', () => location.reload());
+</script>
+{% endblock %}

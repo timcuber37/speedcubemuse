@@ -1,0 +1,347 @@
+{% extends "game/_base.html" %}
+{% block title %}Head to head{% endblock %}
+
+{% block content %}
+<div class="game-header">
+    <h1>Head to head</h1>
+    <p class="subtitle">Pick a competitor each, then take turns asking. First to name the other's wins.</p>
+</div>
+
+{% if not pvp_ready %}
+<div class="game-panel setup-notice">
+    <h2>Head-to-head isn't set up yet</h2>
+    <p>
+        Matches are stored in Supabase, and the tables haven't been created on
+        this server. Run <code>supabase_game_setup.sql</code> once in the
+        Supabase SQL editor to enable this mode &mdash; the other two modes work
+        without it.
+    </p>
+</div>
+{% endif %}
+
+<div id="signin-gate" class="game-panel hidden">
+    <p>Head-to-head needs an account, so both players stay attached to the match.</p>
+    <a href="/login" class="game-btn game-btn-primary" style="display:block;text-align:center;text-decoration:none;margin-top:16px;">Sign in</a>
+</div>
+
+<div id="lobby" class="game-panel hidden">
+    <div class="pvp-tabs">
+        <button class="pvp-tab active" data-tab="create">Start a match</button>
+        <button class="pvp-tab" data-tab="join">Join with a code</button>
+    </div>
+
+    <div id="tab-join" class="hidden">
+        <label class="game-label" for="join-code">Join code</label>
+        <input type="text" id="join-code" class="pvp-code-input" placeholder="ABC123" maxlength="6" autocomplete="off">
+    </div>
+
+    <div id="tab-create">
+        <label class="game-label" for="difficulty">Difficulty</label>
+        <select id="difficulty" class="game-select">
+            <option value="easy">Easy &mdash; 300 best-known competitors</option>
+            <option value="normal" selected>Normal &mdash; 1,000 competitors</option>
+            <option value="hard">Hard &mdash; every record holder and world top 100</option>
+            <option value="everyone">Everyone &mdash; any competitor with 5+ competitions</option>
+        </select>
+    </div>
+
+    <label class="game-label" for="cuber-input">Your competitor &mdash; keep it to yourself</label>
+    <div class="guess-bar">
+        <input type="text" id="cuber-input" placeholder="Search by name…" autocomplete="off">
+        <div id="suggestions" class="suggestions hidden"></div>
+    </div>
+    <p id="chosen" class="pvp-chosen hidden"></p>
+    <p id="lobby-error" class="game-error hidden"></p>
+
+    <button id="go-btn" class="game-btn game-btn-primary" disabled>Choose a competitor first</button>
+</div>
+
+<div id="waiting" class="game-panel hidden">
+    <h2 class="pvp-waiting-title">Waiting for an opponent</h2>
+    <p class="guess-lead">Share this code:</p>
+    <div id="code-display" class="pvp-code-display"></div>
+    <p class="guess-meta">This page updates itself when they join.</p>
+</div>
+
+<div id="match" class="game-panel hidden">
+    <div class="game-progress">
+        <span id="turn-indicator"></span>
+        <button id="resign-btn" class="game-btn-link">Resign</button>
+    </div>
+
+    <p id="your-cuber" class="pvp-chosen"></p>
+    <ol id="feed" class="qa-log"></ol>
+
+    <form id="ask-form" class="ask-form">
+        <div class="ask-bar">
+            <input type="text" id="question" placeholder="Ask about their cuber…" autocomplete="off" required>
+            <button type="submit" id="pvp-ask-btn">Ask</button>
+        </div>
+    </form>
+
+    <div class="guess-bar">
+        <input type="text" id="guess-input" placeholder="Name their cuber…" autocomplete="off">
+        <div id="guess-suggestions" class="suggestions hidden"></div>
+    </div>
+</div>
+
+<div id="result" class="game-panel hidden"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let mode = 'create';
+    let chosen = null;
+    let matchId = null;
+    let channel = null;
+    let lastMoveId = 0;
+
+    const $ = (id) => document.getElementById(id);
+    const show = (id) => $(id).classList.remove('hidden');
+    const hide = (id) => $(id).classList.add('hidden');
+
+    async function authHeaders() {
+        if (!sbClient) return {};
+        const { data: { session } } = await sbClient.auth.getSession();
+        return session ? { Authorization: `Bearer ${session.access_token}` } : {};
+    }
+
+    async function api(path, body) {
+        const headers = { 'Content-Type': 'application/json', ...(await authHeaders()) };
+        const res = await fetch(path, {
+            method: body === undefined ? 'GET' : 'POST',
+            headers,
+            body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok && !data.error) data.error = 'Something went wrong.';
+        return data;
+    }
+
+    // -- lobby -------------------------------------------------------------
+
+    document.querySelectorAll('.pvp-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            mode = tab.dataset.tab;
+            document.querySelectorAll('.pvp-tab').forEach(t => t.classList.toggle('active', t === tab));
+            $('tab-create').classList.toggle('hidden', mode !== 'create');
+            $('tab-join').classList.toggle('hidden', mode !== 'join');
+            updateGoButton();
+        });
+    });
+
+    function updateGoButton() {
+        const btn = $('go-btn');
+        const ready = chosen && (mode === 'create' || $('join-code').value.trim().length === 6);
+        btn.disabled = !ready;
+        btn.textContent = !chosen ? 'Choose a competitor first'
+            : mode === 'create' ? 'Create match' : 'Join match';
+    }
+
+    $('join-code').addEventListener('input', updateGoButton);
+
+    let searchTimer = null;
+    $('cuber-input').addEventListener('input', (e) => {
+        clearTimeout(searchTimer);
+        const q = e.target.value.trim();
+        if (q.length < 2) return hide('suggestions');
+        searchTimer = setTimeout(() => runSearch(q, 'suggestions', pick), 180);
+    });
+
+    async function runSearch(q, boxId, onPick) {
+        const diff = $('difficulty') ? $('difficulty').value : '';
+        const res = await fetch(
+            `/api/game/search?q=${encodeURIComponent(q)}&difficulty=${encodeURIComponent(diff)}`);
+        const data = await res.json().catch(() => ({ results: [] }));
+        if (!(data.results || []).length) return hide(boxId);
+
+        $(boxId).innerHTML = data.results.map(r =>
+            `<button class="suggestion" data-id="${esc(r.wca_id)}" data-name="${esc(r.name)}">
+                ${esc(r.name)} <span class="suggestion-country">${esc(r.country)}</span>
+             </button>`).join('');
+        show(boxId);
+        $(boxId).querySelectorAll('.suggestion').forEach(btn => {
+            btn.addEventListener('click', () => onPick(btn.dataset.id, btn.dataset.name));
+        });
+    }
+
+    function pick(wcaId, name) {
+        chosen = { wca_id: wcaId, name };
+        $('cuber-input').value = '';
+        hide('suggestions');
+        $('chosen').textContent = `You picked ${name}`;
+        show('chosen');
+        updateGoButton();
+    }
+
+    $('go-btn').addEventListener('click', async () => {
+        hide('lobby-error');
+        $('go-btn').disabled = true;
+
+        const data = mode === 'create'
+            ? await api('/api/game/pvp/create',
+                { difficulty: $('difficulty').value, wca_id: chosen.wca_id })
+            : await api('/api/game/pvp/join',
+                { join_code: $('join-code').value.trim(), wca_id: chosen.wca_id });
+
+        if (data.error) {
+            $('lobby-error').textContent = data.error;
+            show('lobby-error');
+            $('go-btn').disabled = false;
+            return;
+        }
+
+        matchId = data.id;
+        hide('lobby');
+        subscribe(matchId);
+
+        if (mode === 'create') {
+            $('code-display').textContent = data.join_code;
+            show('waiting');
+        }
+        refresh();
+    });
+
+    // -- realtime ----------------------------------------------------------
+
+    function subscribe(id) {
+        if (!sbClient) return;
+        // A genuine WebSocket, terminated at Supabase rather than at Flask.
+        // That keeps the web app's scale-to-zero intact — a suspended Fly
+        // machine would drop any socket it was holding itself — and sidesteps
+        // the two Gunicorn workers not sharing memory.
+        channel = sbClient
+            .channel(`match:${id}`)
+            .on('postgres_changes',
+                { event: 'INSERT', schema: 'public', table: 'game_moves',
+                  filter: `match_id=eq.${id}` },
+                () => refresh())
+            .on('postgres_changes',
+                { event: 'UPDATE', schema: 'public', table: 'game_matches',
+                  filter: `id=eq.${id}` },
+                () => refresh())
+            .subscribe();
+    }
+
+    // The server is the authority on match state; a realtime event is only a
+    // nudge to re-read it. That keeps one code path for live updates, for a
+    // refresh, and for a dropped socket.
+    async function refresh() {
+        if (!matchId) return;
+        const s = await api(`/api/game/pvp/${matchId}/state`);
+        if (s.error) return;
+        render(s);
+    }
+
+    function render(s) {
+        if (s.status === 'finished') return renderFinished(s);
+
+        if (s.waiting_for_opponent) {
+            show('waiting');
+            hide('match');
+            return;
+        }
+
+        hide('waiting');
+        show('match');
+
+        $('your-cuber').textContent = s.your_cuber
+            ? `You're hiding ${s.your_cuber.name}` : '';
+        $('turn-indicator').textContent = s.your_turn
+            ? 'Your turn' : "Opponent's turn";
+        $('turn-indicator').className = s.your_turn ? 'pvp-turn-you' : 'pvp-turn-them';
+
+        $('question').disabled = !s.your_turn;
+        $('pvp-ask-btn').disabled = !s.your_turn;
+        $('guess-input').disabled = !s.your_turn;
+
+        renderFeed(s.moves);
+    }
+
+    function renderFeed(moves) {
+        const html = moves.map(m => {
+            const who = m.mine ? 'You' : 'They';
+            if (m.kind === 'joined') return `<li class="qa-entry qa-skip"><span class="qa-q">Opponent joined</span></li>`;
+            if (m.kind === 'question') {
+                return `<li class="qa-entry qa-${esc(m.payload.answer)}">
+                    <span class="qa-q">${esc(who)} asked: ${esc(m.payload.question)}</span>
+                    <span class="qa-a">${m.payload.answer === 'yes' ? 'Yes' : 'No'}</span></li>`;
+            }
+            if (m.kind === 'guess') {
+                return `<li class="qa-entry qa-${m.payload.correct ? 'yes' : 'no'}">
+                    <span class="qa-q">${esc(who)} guessed ${esc(m.payload.name)}</span>
+                    <span class="qa-a">${m.payload.correct ? 'Correct' : 'Wrong'}</span></li>`;
+            }
+            if (m.kind === 'resign') return `<li class="qa-entry qa-skip"><span class="qa-q">${esc(who)} resigned</span></li>`;
+            return '';
+        }).join('');
+        $('feed').innerHTML = html;
+        $('feed').scrollTop = $('feed').scrollHeight;
+    }
+
+    function renderFinished(s) {
+        hide('match');
+        hide('waiting');
+        show('result');
+        const won = s.you_won;
+        $('result').innerHTML = `
+            <div class="guess-card">
+                <h2>${won ? 'You win.' : 'You lost this one.'}</h2>
+                <div class="avatar-slot" id="mine-avatar"></div>
+                ${s.your_cuber ? `<p class="guess-meta">You were hiding ${esc(s.your_cuber.name)}.</p>` : ''}
+                <button class="game-btn game-btn-primary" onclick="location.href='/game/pvp'">New match</button>
+            </div>`;
+        if (s.your_cuber) mountAvatar($('mine-avatar'), s.your_cuber.wca_id, s.your_cuber.name);
+        if (channel) { sbClient.removeChannel(channel); channel = null; }
+    }
+
+    // -- play --------------------------------------------------------------
+
+    $('ask-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const q = $('question').value.trim();
+        if (!q) return;
+        $('question').value = '';
+        $('pvp-ask-btn').disabled = true;
+        const r = await api(`/api/game/pvp/${matchId}/ask`, { question: q });
+        if (r.error && r.unanswerable) {
+            const li = document.createElement('li');
+            li.className = 'qa-entry qa-skip';
+            li.innerHTML = `<span class="qa-q">${esc(q)}<span class="qa-interp">${esc(r.error)}</span></span>`;
+            $('feed').appendChild(li);
+        }
+        refresh();
+    });
+
+    let guessTimer = null;
+    $('guess-input').addEventListener('input', (e) => {
+        clearTimeout(guessTimer);
+        const q = e.target.value.trim();
+        if (q.length < 2) return hide('guess-suggestions');
+        guessTimer = setTimeout(() => runSearch(q, 'guess-suggestions', async (id) => {
+            $('guess-input').value = '';
+            hide('guess-suggestions');
+            await api(`/api/game/pvp/${matchId}/guess`, { wca_id: id });
+            refresh();
+        }), 180);
+    });
+
+    $('resign-btn').addEventListener('click', async () => {
+        if (!confirm('Resign this match?')) return;
+        await api(`/api/game/pvp/${matchId}/resign`, {});
+        refresh();
+    });
+
+    // -- boot --------------------------------------------------------------
+
+    const PVP_READY = {{ 'true' if pvp_ready else 'false' }};
+
+    async function boot() {
+        if (!PVP_READY) return;            // the setup notice is already showing
+        if (!sbClient) return show('signin-gate');
+        const { data: { session } } = await sbClient.auth.getSession();
+        if (session) { show('lobby'); } else { show('signin-gate'); }
+    }
+    boot();
+</script>
+{% endblock %}

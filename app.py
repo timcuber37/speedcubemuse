@@ -8,8 +8,6 @@ import secrets
 import urllib.parse
 import requests as http_requests
 from flask import Flask, render_template, request, jsonify, redirect, session
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -20,13 +18,15 @@ if sys.platform == 'win32':
 
 from config import (MAX_QUERY_RESULTS, SUPABASE_URL, SUPABASE_ANON_KEY,
                     WCA_CLIENT_ID, WCA_CLIENT_SECRET, WCA_REDIRECT_URI, SECRET_KEY,
-                    QUERY_MODELS, DEFAULT_QUERY_MODEL)
+                    QUERY_MODELS, DEFAULT_QUERY_MODEL, MAX_GUEST_GAME_QUESTIONS)
 from services.nl_to_sql import NLToSQLService
 from services.wca_api import WCAService
 from services.auth import get_user_from_token, find_or_create_wca_user, generate_wca_login_link
 from services.rag import DelegateRAGService
 from services.site_meta import get_site_meta
 from services import saved_queries
+from extensions import limiter
+from blueprints.game import game_bp
 
 _WCA_AUTH_URL = "https://www.worldcubeassociation.org/oauth/authorize"
 _WCA_TOKEN_URL = "https://www.worldcubeassociation.org/oauth/token"
@@ -43,16 +43,13 @@ MAX_QUESTION_LENGTH = 2000
 # Models that guests (signed-out users) may use. Opus and Sonnet require sign-in.
 GUEST_QUERY_MODELS = {'haiku'}
 
-limiter = Limiter(
-    app=app,
-    key_func=get_remote_address,
-    default_limits=["200 per day", "50 per hour"],
-    storage_uri="memory://",
-)
+limiter.init_app(app)
 
 nl_to_sql_service = NLToSQLService()
 wca_service = WCAService()
 delegate_service = DelegateRAGService()
+
+app.register_blueprint(game_bp)
 
 MAX_DELEGATE_HISTORY_MESSAGES = 32
 MAX_DELEGATE_HISTORY_CHARS = 12000  # ~3 K tokens; prevents history token-stuffing
@@ -86,7 +83,11 @@ def set_security_headers(response):
         "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: https:; "
-        "connect-src 'self' https://*.supabase.co https://www.worldcubeassociation.org; "
+        # wss: is spelled out for Supabase Realtime, which carries head-to-head
+        # match updates. CSP3 says an https source also matches wss, but browser
+        # support for that rule is uneven — being explicit costs nothing.
+        "connect-src 'self' https://*.supabase.co wss://*.supabase.co "
+        "https://www.worldcubeassociation.org; "
         "frame-ancestors 'none'; "
         "base-uri 'self'; "
         "form-action 'self';"

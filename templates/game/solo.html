@@ -1,0 +1,215 @@
+{% extends "game/_base.html" %}
+{% block title %}You guess mine{% endblock %}
+
+{% block content %}
+<div class="game-header">
+    <h1>You guess mine</h1>
+    <p class="subtitle">
+        I've picked a competitor. Ask anything in plain English &mdash; "are they European?",
+        "do they have a world record?" &mdash; then name them when you're ready.
+    </p>
+</div>
+
+<div id="setup" class="game-panel">
+    <label class="game-label" for="difficulty">Difficulty</label>
+    <select id="difficulty" class="game-select">
+        <option value="easy">Easy &mdash; 300 best-known competitors</option>
+        <option value="normal" selected>Normal &mdash; 1,000 competitors</option>
+        <option value="hard">Hard &mdash; every record holder and world top 100</option>
+        <option value="everyone">Everyone &mdash; literally any WCA competitor</option>
+    </select>
+    <button id="start-btn" class="game-btn game-btn-primary">Start</button>
+</div>
+
+<div id="play" class="game-panel hidden">
+    <div class="game-progress">
+        <span id="progress-text"></span>
+        <button id="restart-btn" class="game-btn-link">Start over</button>
+    </div>
+
+    <form id="ask-form" class="ask-form">
+        <div class="ask-bar">
+            <input type="text" id="question" placeholder="Ask a yes/no question…" autocomplete="off" required>
+            <button type="submit" id="game-ask-btn">Ask</button>
+        </div>
+    </form>
+
+    <div class="guess-bar">
+        <input type="text" id="guess-input" placeholder="Know who it is? Type a name…" autocomplete="off">
+        <div id="suggestions" class="suggestions hidden"></div>
+    </div>
+    <button id="giveup-btn" class="game-btn-link">Give up and reveal</button>
+</div>
+
+<div id="result" class="game-panel hidden"></div>
+
+{# Outside #play so it survives the game ending — #play is hidden on finish and
+   the question log is the main thing worth reviewing afterwards. #}
+<div id="log-panel" class="game-panel game-log-panel hidden">
+    <h3 id="log-title" class="log-title">Your questions</h3>
+    <ol id="qa-log" class="qa-log"></ol>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // The guest day-cap is enforced server-side by Flask-Limiter on
+    // /api/game/solo/ask; a client-side counter would only be decoration.
+    let token = null;
+    let asked = 0;
+    let busy = false;
+
+    const $ = (id) => document.getElementById(id);
+    const show = (id) => $(id).classList.remove('hidden');
+    const hide = (id) => $(id).classList.add('hidden');
+
+    function updateProgress() {
+        $('progress-text').textContent = asked === 1
+            ? '1 question asked'
+            : `${asked} questions asked`;
+    }
+
+    async function start() {
+        const data = await postJSON('/api/game/solo/start', {
+            difficulty: $('difficulty').value,
+        });
+        if (data.error) {
+            $('setup').innerHTML = `<p class="game-error">${esc(data.error)}</p>`;
+            return;
+        }
+        token = data.token;
+        hide('setup');
+        show('play');
+        updateProgress();
+        $('question').focus();
+    }
+
+    function logEntry(question, answer, kind, interpreted) {
+        const li = document.createElement('li');
+        li.className = `qa-entry qa-${kind}`;
+        // Show how a question was read only when that isn't obvious from the
+        // wording — a negated match ("are they retired?") answers the opposite
+        // attribute, and seeing just the yes/no would look wrong.
+        const note = interpreted
+            ? `<span class="qa-interp">read as: ${esc(interpreted)}</span>` : '';
+        li.innerHTML = `<span class="qa-q">${esc(question)}${note}</span>` +
+                       `<span class="qa-a">${esc(answer)}</span>`;
+        $('qa-log').appendChild(li);
+        show('log-panel');
+        li.scrollIntoView({ block: 'nearest' });
+    }
+
+    async function ask(question) {
+        if (busy || !token) return;
+        busy = true;
+        $('game-ask-btn').disabled = true;
+
+        const data = await postJSON('/api/game/solo/ask', { token, question });
+        busy = false;
+        $('game-ask-btn').disabled = false;
+
+        if (data.error) {
+            // An unmappable question costs the player nothing — it never
+            // reached the secret, so it doesn't count as a question asked.
+            logEntry(question, data.error, data.unanswerable ? 'skip' : 'error');
+            return;
+        }
+
+        asked += 1;
+        updateProgress();
+        logEntry(data.question, data.answer === 'yes' ? 'Yes' : 'No', data.answer,
+                 data.negated ? data.interpreted : null);
+    }
+
+    async function submitGuess(wcaId, name) {
+        const data = await postJSON('/api/game/solo/guess', { token, wca_id: wcaId });
+        if (data.error) {
+            logEntry(`Guess: ${name}`, data.error, 'error');
+            return;
+        }
+        if (data.correct) return finish(data.secret, true);
+        logEntry(`Guess: ${name}`, 'Not them', 'no');
+    }
+
+    function finish(secret, won) {
+        hide('play');
+        show('result');
+        // The log lives outside #play, so it stays on screen for review. Drop
+        // the scroll cap now that it is the whole point of the page.
+        $('log-title').textContent = asked === 1 ? 'Your 1 question'
+                                                 : `Your ${asked} questions`;
+        $('qa-log').classList.add('qa-log-full');
+        $('result').innerHTML = `
+            <div class="guess-card">
+                <h2>${won ? 'Correct.' : 'It was…'}</h2>
+                <div class="avatar-slot" id="secret-avatar"></div>
+                <h3 class="guess-name">${esc(secret.name)}</h3>
+                <p class="guess-meta">${esc(secret.country)}${won ? ` · ${asked} questions` : ''}</p>
+                <a href="${esc(secret.wca_url)}" target="_blank" rel="noopener" class="guess-link">WCA profile &rarr;</a>
+                <div class="guess-actions">
+                    <button class="game-btn game-btn-primary" onclick="location.reload()">Play again</button>
+                </div>
+            </div>`;
+        mountAvatar($('secret-avatar'), secret.wca_id, secret.name);
+    }
+
+    // -- guess autocomplete ------------------------------------------------
+
+    let searchTimer = null;
+
+    $('guess-input').addEventListener('input', (e) => {
+        clearTimeout(searchTimer);
+        const q = e.target.value.trim();
+        if (q.length < 2) return hide('suggestions');
+        // Debounced: the endpoint reads an in-process cache, but there is no
+        // reason to hit it on every keystroke.
+        searchTimer = setTimeout(() => runSearch(q), 180);
+    });
+
+    async function runSearch(q) {
+        // Pass the difficulty so Everyone searches the whole database — the
+        // hidden competitor may be one the engine never loads.
+        const res = await fetch(
+            `/api/game/search?q=${encodeURIComponent(q)}`
+            + `&difficulty=${encodeURIComponent($('difficulty').value)}`);
+        const data = await res.json().catch(() => ({ results: [] }));
+        const results = data.results || [];
+        if (!results.length) return hide('suggestions');
+
+        $('suggestions').innerHTML = results.map(r =>
+            `<button class="suggestion" data-id="${esc(r.wca_id)}" data-name="${esc(r.name)}">
+                ${esc(r.name)} <span class="suggestion-country">${esc(r.country)}</span>
+             </button>`
+        ).join('');
+        show('suggestions');
+
+        $('suggestions').querySelectorAll('.suggestion').forEach(btn => {
+            btn.addEventListener('click', () => {
+                $('guess-input').value = '';
+                hide('suggestions');
+                submitGuess(btn.dataset.id, btn.dataset.name);
+            });
+        });
+    }
+
+    $('ask-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const input = $('question');
+        const q = input.value.trim();
+        if (!q) return;
+        input.value = '';
+        ask(q);
+    });
+
+    $('giveup-btn').addEventListener('click', async () => {
+        if (!confirm('Reveal the answer and end the game?')) return;
+        const data = await postJSON('/api/game/solo/guess', {
+            token, wca_id: '', reveal: true,
+        });
+        if (data.secret) finish(data.secret, false);
+    });
+
+    $('start-btn').addEventListener('click', start);
+    $('restart-btn').addEventListener('click', () => location.reload());
+</script>
+{% endblock %}

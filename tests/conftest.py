@@ -1,4 +1,8 @@
 """pytest configuration — skip all DB tests if the database is unreachable."""
+# Test modules that need a live database. The game suites read `cuber_profiles`,
+# which lives in the same TiDB instance as the WCA export.
+DB_BACKED_MODULES = ('test_database', 'test_game_profiles', 'test_game_engine')
+
 import ssl
 import sys
 from pathlib import Path
@@ -15,7 +19,7 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    """Skip every test in test_database.py if the DB is unreachable."""
+    """Skip every DB-backed test module if the database is unreachable."""
     try:
         import certifi
         import pymysql
@@ -33,7 +37,7 @@ def pytest_collection_modifyitems(config, items):
     except Exception as exc:
         skip = pytest.mark.skip(reason=f"Database unreachable: {exc}")
         for item in items:
-            if "test_database" in str(item.fspath):
+            if any(mod in str(item.fspath) for mod in DB_BACKED_MODULES):
                 item.add_marker(skip)
 
 

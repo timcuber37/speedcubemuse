@@ -9,6 +9,7 @@ An AI-powered tool that lets you query World Cube Association competition data u
 - Natural language to SQL translation using Anthropic's Claude AI
 - Query WCA statistics using plain English — no SQL required
 - **Ask a Delegate** — AI chatbot grounded in WCA Regulations and Guidelines using a RAG pipeline
+- **Guess the Cuber** — an Akinator-style guessing game over the WCA competitor pool, in three modes
 - Web interface with instant results displayed in formatted tables
 - Discord bot with the same query capabilities
 - Google and WCA OAuth sign-in via Supabase Auth
@@ -50,6 +51,179 @@ The database is refreshed automatically every Monday by the `Weekly WCA database
 1. User asks a WCA rules question in plain English
 2. The question is matched against all 697 WCA regulations and guidelines using Voyage AI vector embeddings and pgvector similarity search, then re-ranked
 3. Claude generates a grounded response with citations linked to the official WCA Regulations page
+
+### Guess the Cuber
+
+An Akinator-style game over the WCA competitor pool. **The LLM is not the game
+engine** — Akinator is an information-gain search over a feature matrix, not a
+language model, and this works the same way.
+
+`scripts/build_cuber_profiles.py` precomputes ~37 attributes for **every WCA
+competitor** into a `cuber_profiles` table during the weekly refresh — all
+~297,000 of them. A `fame` score (records, World Championship podiums, recency,
+result volume) ranks the ~2,100 who have held a continental record or better or
+sit in a current world top 100, and those form the first three tiers.
+
+| Difficulty | Pool | Rows |
+|---|---|---|
+| Easy | best-known competitors | 300 |
+| Normal | + the next tier of names | 1,000 |
+| Hard | every record holder and current world top 100 | 2,097 |
+| Everyone | + everyone with 5+ competitions | 51,904 resident |
+| *(you guess mine only)* | literally any competitor | 296,987 |
+
+Everyone stops at five competitions for the modes where the *app* guesses,
+because that is where the data runs out: 155k competitors have been to exactly
+one competition and 50k to two, and their profiles are identical in nearly every
+attribute the game can ask about. "You guess mine" has no such limit — it holds
+one secret and answers questions about that single row, so it reaches the full
+297k via an indexed lookup rather than loading the pool.
+
+Memory is the constraint that shapes this. The Fly machine has 512 MB and runs
+two workers, so the Everyone pool loads only when that difficulty is actually
+played, and `_shape` folds duplicate strings onto shared objects — `json.loads`
+allocates a fresh string per key per row, which measured as the largest single
+use of memory in the worker (192 MB → 69 MB once folded).
+
+Two parts of the schema are easy to get wrong, and both are asserted in
+`tests/test_game_profiles.py`:
+
+- **Records are a hierarchy — WR > CR > NR.** `has_cr_or_better` is true for
+  anyone who has set a world record, even with zero recorded continental
+  records. Without this the FMC world record holder answers "no" to "continental
+  record or better", which is how the bug was found. "Ever set" and "currently
+  holds" are also separate questions: the `currently_*` attributes come from the
+  rank tables, where the hierarchy is automatic since rank 1 in the world is
+  necessarily rank 1 in your continent and country.
+- **Event groups.** `big_cubes` (4x4–7x7), `blind_events` (3BLD, 4BLD, 5BLD,
+  MBLD) and `side_events` (Pyraminx, Megaminx, Skewb, Square-1, Clock) are
+  defined once in `services/game/attributes.py` and drive both the specialist
+  booleans and the group questions, so the two cannot drift apart.
+  `top100_events` is set-valued, so "top 100 in 4x4?", "in any blind event?" and
+  "in 3x3?" are all one attribute rather than a boolean per event.
+
+Question *selection* is then pure entropy math over that matrix — expected
+information gain, no API call. Answers update a Bayesian belief rather than
+filtering candidates outright, so one wrong answer damps a candidate instead of
+eliminating it and the search can recover.
+
+Predicates are evaluated on demand rather than indexed: a precomputed
+predicate→rows map costs ~140 MB at 52k candidates against ~62 MB for the rows
+themselves, while `Predicate.test()` runs in 0.06 µs. Question scoring samples
+the candidates once the pool is large, which holds a turn at ~150 ms whatever
+the pool size — unsampled it took 36 seconds at full scale.
+
+Measured by self-play:
+
+| Pool | Accuracy | Median questions |
+|---|---|---|
+| Easy (300) | 100% | 10 |
+| Hard (2,097) | 100% | 13 |
+| Hard, with 10% of answers wrong | 90% | — |
+| Everyone (51,904) | 60% | 26 |
+
+That last row is why the app offers a **shortlist** instead of a single name
+when it isn't confident: on the Everyone pool the search regularly runs out of
+separating questions with a cluster of near-identical candidates still standing,
+and naming one of them would just be a confident wrong answer.
+
+### Never asking what you already answered
+
+The belief update is deliberately soft, and that has a cost: answering "yes,
+75+ competitions" leaves ~44% of the probability mass on candidates with fewer,
+so "20+ competitions?" still scores as informative even though its answer is
+certain. Measured on the ~52k pool, **42% of questions were logically settled by
+an earlier answer** — nearly all of them another value of a categorical the
+player had already pinned down ("they're Swiss" followed by "are they German?",
+across 166 countries).
+
+`Engine.implied()` derives the settled set from the answer log and excludes it
+from selection: weaker numeric thresholds after a yes and stronger ones after a
+no, every other value of a decided categorical, event groups implied by a member
+(and members ruled out by an empty group), and the declared boolean hierarchies
+in `Attribute.implies` walked transitively in both directions. That took implied
+questions to 0% and cut the median Everyone game from 46 questions to 26, with
+accuracy unchanged.
+
+`pick_question` takes the answer log rather than a set of asked ids so this
+cannot be bypassed — and, importantly, so the settled set is never confused with
+the question count. `should_guess` counts only questions actually put to the
+player; folding the settled ids into the same set ends a game after about six
+real questions, since pinning down a country settles a hundred-odd others at
+once.
+
+### Profile photos
+
+The result card shows the competitor's WCA profile photo, fetched straight from
+the browser — the public API sends `access-control-allow-origin: *`, so no proxy
+is needed and a ~350ms call to a third party never delays the guess itself. It
+only appears once the answer is revealed, never during play.
+
+`avatar.is_default` marks competitors who never uploaded one, whose URL points
+at a generic silhouette; those are skipped, and the empty slot collapses so no
+gap is left. That branch is common — roughly 75% of the Easy tier has a real
+photo against ~40% of the Everyone tier. No CSP change was needed (`img-src`
+already allows https, `connect-src` already lists the WCA API), but tests pin
+both, since a tightened policy would break this silently.
+
+### When it stops asking
+
+Three conditions end a round, whichever comes first: the leader clears
+`GUESS_THRESHOLD` (90%), one candidate is left, or no remaining question
+meaningfully separates the field. `MAX_QUESTIONS` (75) is the backstop for a
+secret that genuinely cannot be narrowed.
+
+Above the threshold the app names the competitor outright; below it, it offers a
+shortlist. Measured across all three pools every outright guess was correct at
+both 85% and 90%, so the bar is headroom rather than a fix — it costs about two
+extra questions on the largest pool and none on the curated ones, where the
+belief clears any of these thresholds in a single answer.
+
+The third condition is the one doing the work, because information gain
+collapses as the search narrows — measured on the ~52k pool, the median question
+is worth 0.60 bits at Q1, 0.26 at Q15, 0.02 at Q25, 0.001 at Q40 and 0.0001 by
+Q74. Running to a fixed cap would mean asking dozens of questions that provably
+cannot change the answer, so `MIN_QUESTION_GAIN` stops the search when questions
+stop earning their place. On the curated pools it never applies; games there end
+on confidence around question 13.
+
+| Mode | Route | Model calls |
+|------|-------|-------------|
+| **I'll guess yours** — you think of a competitor, the app asks | `/game/akinator` | **none** |
+| **You guess mine** — the app hides one, you ask in plain English | `/game/solo` | one Haiku call per typed question |
+| **Head to head** — two players race to name each other's | `/game/pvp` | one per typed question |
+
+Only free-text questions reach a model, and only to map wording onto a known
+attribute (`"are they retired?"` → `is_active is false`). That is a small
+classification task on Haiku with a cached system prompt, and results are cached
+by normalized question text in two tiers — per-process, then a shared
+`game_question_cache` table. A repeat question resolves in about a millisecond
+and costs nothing.
+
+Rate limits follow the same split. Question selection, name search and guessing
+never call a model, so they are exempt or capped only high enough to stop a
+client hammering the CPU (`GAME_LIMIT_FREE`, `GAME_LIMIT_CHEAP`); only the two
+"ask" endpoints are held tighter (`GAME_LIMIT_ASK`), plus a guest day-cap
+(`MAX_GUEST_GAME_QUESTIONS`) that signed-in users are exempt from. That cap is
+the one control stopping an anonymous visitor running up an API bill, so prefer
+raising it to removing it. `GAME_RATE_LIMITS=false` exempts the game entirely —
+note it *exempts* rather than un-decorating, because an undecorated route would
+inherit the app-wide 200/day + 50/hour defaults and end up more restricted than
+before.
+
+Cache entries carry a fingerprint of the attribute schema and are ignored when
+it changes. This matters most for cached *declines*: a question the schema
+couldn't answer yesterday becomes answerable the moment an attribute lands, and
+a stale "I can't answer that" would otherwise keep refusing it invisibly.
+Nothing needs purging by hand.
+
+State is deliberately externalized: the web app runs two Gunicorn workers with no
+sticky sessions and the Fly machine suspends when idle, so nothing survives in
+process memory between turns. Mode 2 is fully stateless (the client replays its
+answer log, and the secret is only ever in the player's head); Mode 1 seals the
+secret into a Fernet-encrypted token the browser carries — a Flask session cookie
+is signed but *not* encrypted, so a player could simply decode it; head-to-head
+keeps match state in Supabase.
 
 ## Web App
 
@@ -102,13 +276,22 @@ wca_statbot/
 │   ├── Dockerfile          # Bot image (built with the repo root as context)
 │   ├── fly.toml            # speedcubemuse-bot app config (no HTTP service; never suspends)
 │   └── requirements.txt    # Bot-only dependencies
+├── blueprints/
+│   └── game.py             # Guess the Cuber routes (registered on the Flask app)
 ├── services/
 │   ├── nl_to_sql.py        # Natural language to SQL translation (Claude AI)
 │   ├── wca_api.py          # WCA database query execution and formatting
 │   ├── rag.py              # Ask a Delegate RAG pipeline (Voyage AI + Claude)
 │   ├── auth.py             # Supabase authentication helpers
 │   ├── saved_queries.py    # Saved query CRUD operations
-│   └── site_meta.py        # DB-backed export date + stats shown on the site
+│   ├── site_meta.py        # DB-backed export date + stats shown on the site
+│   └── game/               # Guess the Cuber
+│       ├── attributes.py       # Attribute schema — single source of truth
+│       ├── engine.py           # Bayesian filter + information-gain picker
+│       ├── profiles.py         # cuber_profiles read path + process cache
+│       ├── question_parser.py  # Free text -> predicate (the only model call)
+│       ├── tokens.py           # Fernet-sealed secrets for solo games
+│       └── pvp.py              # Head-to-head match state (Supabase)
 ├── templates/
 │   ├── index.html          # Main query page
 │   ├── about.html          # About page
@@ -118,9 +301,13 @@ wca_statbot/
 ├── static/
 │   └── style.css           # Styles
 ├── scripts/
-│   └── update_database.py  # Download and reload WCA data export into TiDB
+│   ├── update_database.py       # Download and reload WCA data export into TiDB
+│   └── build_cuber_profiles.py  # Build the Guess the Cuber feature matrix
 ├── tests/
-│   └── test_database.py    # Integration tests for database integrity
+│   ├── test_database.py       # Integration tests for database integrity
+│   ├── test_game_profiles.py  # Feature-matrix integrity
+│   ├── test_game_engine.py    # Engine unit tests + self-play quality gate
+│   └── test_game_api.py       # Token sealing + model-output validation
 ├── .github/
 │   └── workflows/
 │       ├── deploy.yml            # CI/CD (auto-deploys both Fly apps on push)
@@ -161,6 +348,14 @@ ANTHROPIC_MODEL=claude-sonnet-5
 
 # Voyage AI (Ask a Delegate RAG)
 VOYAGE_API_KEY=your_key_here
+
+# Guess the Cuber (optional — these are the defaults)
+GAME_MODEL=claude-haiku-4-5
+GAME_RATE_LIMITS=true
+GAME_LIMIT_FREE=300 per minute
+GAME_LIMIT_CHEAP=120 per minute
+GAME_LIMIT_ASK=60 per minute
+MAX_GUEST_GAME_QUESTIONS=300
 
 # WCA Database (TiDB Serverless)
 DB_HOST=gateway01.us-east-1.prod.aws.tidbcloud.com
@@ -234,11 +429,41 @@ which is also the automatic fallback if `LOAD DATA` errors.
 The freshness check reads the last-loaded export date from the `site_meta` table,
 falling back to the local `scripts/.last_export_date` file.
 
-### Run database integrity tests
+### Build the Guess the Cuber matrix
+
+Runs automatically at the end of `update_database.py`; these are for running it
+by hand:
 
 ```bash
-python -m pytest tests/test_database.py -v
+python scripts/build_cuber_profiles.py             # build and write
+python scripts/build_cuber_profiles.py --dry-run   # report only, no writes
+python scripts/update_database.py --skip-profiles  # reload WCA data, skip the rebuild
 ```
+
+`--dry-run` prints the pool size, the tier split, and per-attribute balance. Read
+the balance column: a boolean true for under 5% or over 95% of the pool barely
+ever splits candidates, and a numeric threshold nothing meets is dead weight.
+Retune `thresholds` in `services/game/attributes.py` and re-run — the build takes
+about 90 seconds; it profiles every competitor, not just the ranked ones. `tests/test_game_profiles.py` asserts both conditions so a
+retuned threshold can't silently rot later.
+
+Head-to-head additionally needs `supabase_game_setup.sql` run once in the
+Supabase SQL Editor; the other two modes work without it.
+
+### Run tests
+
+```bash
+python -m pytest tests/ -v                    # everything
+python -m pytest tests/test_database.py -v    # WCA data integrity
+python -m pytest tests/test_game_engine.py -v -s   # includes the self-play gate
+```
+
+The self-play tests play the engine against every candidate with a perfect oracle
+and assert a median of ≤ 15 questions, then replay with 10% of answers flipped to
+confirm the Bayesian update still recovers. That is the real quality gate for the
+game: whether ~33 attributes actually separate 2,100 people is not something you
+can tell by reading the list. All DB-backed suites skip automatically when the
+database is unreachable.
 
 ## Deployment
 

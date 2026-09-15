@@ -1,0 +1,133 @@
+{# Shared shell for the Guess the Cuber pages.
+
+   The older templates each carry their own copy of the nav and auth script.
+   Rather than add three more copies, the game pages share this one. Existing
+   pages are left alone — this is a local improvement, not a migration. #}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Guess the Cuber{% endblock %} - SpeedCubeMuse</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-32.png') }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon-16.png') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-inner">
+            <a href="/" class="nav-logo"><img src="{{ url_for('static', filename='logo.png') }}" alt="" class="nav-logo-img">SpeedCubeMuse</a>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Home</a>
+                <a href="/delegate" class="nav-link">Ask a Delegate</a>
+                <a href="/game" class="nav-link active">Guess the Cuber</a>
+                <a href="/about" class="nav-link">About</a>
+                <button class="auth-btn" id="auth-btn" onclick="handleAuth()">Sign In</button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container game-container">
+        {% block content %}{% endblock %}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+        const SUPABASE_URL = '{{ supabase_url }}';
+        const SUPABASE_ANON_KEY = '{{ supabase_anon_key }}';
+
+        let sbClient = null;
+        let currentUser = null;
+
+        if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+            sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+            sbClient.auth.getSession().then(({ data: { session } }) => {
+                currentUser = session?.user || null;
+                updateAuthUI();
+            });
+            sbClient.auth.onAuthStateChange((event, session) => {
+                currentUser = session?.user || null;
+                updateAuthUI();
+            });
+        } else {
+            updateAuthUI();
+        }
+
+        function updateAuthUI() {
+            const btn = document.getElementById('auth-btn');
+            if (currentUser) {
+                btn.textContent = currentUser.user_metadata?.full_name || currentUser.email || 'Profile';
+                btn.onclick = () => { window.location.href = '/profile'; };
+            } else {
+                btn.textContent = 'Sign In';
+                btn.onclick = handleAuth;
+            }
+        }
+
+        function handleAuth() {
+            window.location.href = currentUser ? '/profile' : '/login';
+        }
+
+        // Escape before inserting any server- or player-supplied text. Cuber
+        // names come from the WCA database and contain apostrophes and CJK
+        // characters; question text is built from the attribute schema.
+        function esc(s) {
+            const d = document.createElement('div');
+            d.textContent = s == null ? '' : String(s);
+            return d.innerHTML;
+        }
+
+        // WCA profile photos, fetched straight from the browser.
+        //
+        // The API sends `access-control-allow-origin: *`, so there is no need
+        // to proxy it, and doing this client-side after the result card is
+        // already on screen means a ~350ms call to a third party never delays
+        // the guess itself. The CSP needs no change: img-src already allows
+        // https, and connect-src already lists worldcubeassociation.org.
+        async function wcaAvatarUrl(wcaId) {
+            try {
+                const res = await fetch(
+                    'https://www.worldcubeassociation.org/api/v0/persons/'
+                    + encodeURIComponent(wcaId));
+                if (!res.ok) return null;
+                const data = await res.json();
+                const avatar = data && data.person && data.person.avatar;
+                // `is_default` means they never uploaded one and the URL points
+                // at a generic silhouette — better to show nothing than that.
+                if (!avatar || avatar.is_default || !avatar.thumb_url) return null;
+                return avatar.thumb_url;
+            } catch (e) {
+                return null;   // a missing photo is never worth surfacing
+            }
+        }
+
+        // Drops the photo into `slot` once it has actually decoded, so a slow or
+        // broken image never shows as a torn placeholder on the result card.
+        function mountAvatar(slot, wcaId, name) {
+            if (!slot || !wcaId) return;
+            wcaAvatarUrl(wcaId).then(url => {
+                if (!url) return;
+                const img = new Image();
+                img.className = 'cuber-avatar';
+                img.alt = name ? `${name}'s WCA profile photo` : '';
+                img.referrerPolicy = 'no-referrer';
+                img.onload = () => { slot.replaceChildren(img); };
+                img.src = url;
+            });
+        }
+
+        async function postJSON(url, body) {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok && !data.error) data.error = 'Something went wrong. Try again.';
+            return data;
+        }
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

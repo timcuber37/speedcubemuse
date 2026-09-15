@@ -22,6 +22,31 @@ QUERY_MODELS = {
 }
 DEFAULT_QUERY_MODEL = "sonnet"
 
+# Guess the Cuber
+# Haiku by default: mapping a typed question onto a known attribute is a small
+# classification task, and the game asks it many times per session. Question
+# *selection* costs nothing — it is entropy math over the precomputed matrix —
+# so this is the feature's only model spend.
+GAME_MODEL = os.getenv("GAME_MODEL", "claude-haiku-4-5")
+
+# Rate limits, split by what an endpoint actually costs to serve.
+#
+# Most of the game is free: question selection is entropy math over the
+# precomputed matrix and name search reads a process-local cache, so those
+# endpoints are bounded only to stop a client hammering the CPU. Only the two
+# "ask" endpoints reach Claude, and they keep a tighter limit plus a guest
+# day-cap — that cap is the one control that stops an anonymous visitor running
+# up an API bill.
+#
+# Set GAME_RATE_LIMITS=false to exempt the whole game (useful locally; note this
+# also bypasses Flask-Limiter's 200/day + 50/hour defaults, which would
+# otherwise be *tighter* than the per-endpoint limits below).
+GAME_RATE_LIMITS = os.getenv("GAME_RATE_LIMITS", "true").lower() != "false"
+GAME_LIMIT_FREE = os.getenv("GAME_LIMIT_FREE", "300 per minute")
+GAME_LIMIT_CHEAP = os.getenv("GAME_LIMIT_CHEAP", "120 per minute")
+GAME_LIMIT_ASK = os.getenv("GAME_LIMIT_ASK", "60 per minute")
+MAX_GUEST_GAME_QUESTIONS = int(os.getenv("MAX_GUEST_GAME_QUESTIONS", "300"))
+
 # WCA API Configuration
 WCA_API_BASE_URL = os.getenv("WCA_API_BASE_URL", "https://www.worldcubeassociation.org/api/v0")
 # Alternative: If using the unofficial REST API

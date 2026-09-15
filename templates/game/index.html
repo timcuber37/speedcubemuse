@@ -1,0 +1,61 @@
+{% extends "game/_base.html" %}
+{% block title %}Guess the Cuber{% endblock %}
+
+{% block content %}
+<div class="game-header">
+    <h1>Guess the Cuber</h1>
+    <p class="subtitle">
+        A guessing game over the WCA database. Every competitor in the pool has held a
+        continental record or better, or is currently ranked in the world top 100.
+    </p>
+</div>
+
+<div class="mode-grid">
+    <a href="/game/akinator" class="mode-card">
+        <div class="mode-badge">Mode 1</div>
+        <h2>I'll guess yours</h2>
+        <p>
+            Think of a competitor and answer yes or no. Usually takes about a dozen
+            questions &mdash; and it can recover if you get one wrong.
+        </p>
+        <span class="mode-cta">Play &rarr;</span>
+    </a>
+
+    <a href="/game/solo" class="mode-card">
+        <div class="mode-badge">Mode 2</div>
+        <h2>You guess mine</h2>
+        <p>
+            I pick a competitor in secret. Ask anything you like in plain English,
+            then name them when you're ready.
+        </p>
+        <span class="mode-cta">Play &rarr;</span>
+    </a>
+
+    <a href="/game/pvp" class="mode-card">
+        <div class="mode-badge">Mode 3</div>
+        <h2>Head to head</h2>
+        <p>
+            You and a friend each pick a competitor and take turns asking. First to
+            name the other's wins. Share a code to start.
+        </p>
+        <span class="mode-cta">Play &rarr;</span>
+    </a>
+</div>
+
+<div class="game-difficulty-note">
+    <h3>Difficulty</h3>
+    <p>
+        <strong>Easy</strong> is the 300 most recognizable competitors.
+        <strong>Normal</strong> widens that to 1,000.
+        <strong>Hard</strong> is every record holder and current world top 100 &mdash;
+        including plenty you may genuinely never have heard of.
+    </p>
+    <p>
+        <strong>Everyone</strong> goes further. In <em>you guess mine</em> it can hide
+        literally any WCA competitor, all ~297,000 of them. In the modes where the app
+        has to do the guessing it covers everyone with five or more competitions:
+        below that, over half the database has been to a single competition and looks
+        identical in every attribute there is to ask about.
+    </p>
+</div>
+{% endblock %}
