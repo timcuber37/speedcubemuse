@@ -64,13 +64,28 @@
 </div>
 
 <div id="match" class="game-panel hidden">
-    <div class="game-progress">
-        <span id="turn-indicator"></span>
+    <div id="turn-banner" class="turn-banner">
+        <span class="turn-dot" aria-hidden="true"></span>
+        <span id="turn-text"></span>
         <button id="resign-btn" class="game-btn-link">Resign</button>
     </div>
 
     <p id="your-cuber" class="pvp-chosen"></p>
-    <ol id="feed" class="qa-log"></ol>
+
+    {# Two tracks rather than one list. Both players ask about each other's
+       cuber, so a single chronological column forces you to read "You"/"They"
+       on every line to work out whose information you're looking at. #}
+    <div class="feed-grid">
+        <section class="feed-track">
+            <h3 class="feed-head feed-head-you">You asked</h3>
+            <ol id="feed-you" class="feed-col"></ol>
+        </section>
+        <section class="feed-track">
+            <h3 class="feed-head feed-head-them">They asked</h3>
+            <ol id="feed-them" class="feed-col"></ol>
+        </section>
+    </div>
+    <p id="feed-empty" class="feed-empty">No questions yet.</p>
 
     <form id="ask-form" class="ask-form">
         <div class="ask-bar">
@@ -83,6 +98,7 @@
         <input type="text" id="guess-input" placeholder="Name their cuber…" autocomplete="off">
         <div id="guess-suggestions" class="suggestions hidden"></div>
     </div>
+    <p id="turn-lock" class="turn-lock hidden">Waiting for your opponent to move.</p>
 </div>
 
 <div id="result" class="game-panel hidden"></div>
@@ -247,9 +263,16 @@
 
         $('your-cuber').textContent = s.your_cuber
             ? `You're hiding ${s.your_cuber.name}` : '';
-        $('turn-indicator').textContent = s.your_turn
-            ? 'Your turn' : "Opponent's turn";
-        $('turn-indicator').className = s.your_turn ? 'pvp-turn-you' : 'pvp-turn-them';
+
+        // Whose turn it is drives the whole panel, not just a line of text —
+        // this is the one thing a player needs to read at a glance.
+        $('turn-text').textContent = s.your_turn
+            ? 'Your turn — ask a question or name their cuber'
+            : 'Their turn';
+        $('turn-banner').className =
+            'turn-banner ' + (s.your_turn ? 'is-yours' : 'is-theirs');
+        $('match').classList.toggle('awaiting', !s.your_turn);
+        $('turn-lock').classList.toggle('hidden', s.your_turn);
 
         $('question').disabled = !s.your_turn;
         $('pvp-ask-btn').disabled = !s.your_turn;
@@ -258,25 +281,40 @@
         renderFeed(s.moves);
     }
 
+    function moveCard(m) {
+        if (m.kind === 'question') {
+            const yes = m.payload.answer === 'yes';
+            return `<li class="move move-${yes ? 'yes' : 'no'}">
+                <span class="move-q">${esc(m.payload.question)}</span>
+                <span class="move-a">${yes ? 'Yes' : 'No'}</span></li>`;
+        }
+        if (m.kind === 'guess') {
+            return `<li class="move move-${m.payload.correct ? 'win' : 'miss'}">
+                <span class="move-q">Guessed ${esc(m.payload.name)}</span>
+                <span class="move-a">${m.payload.correct ? 'Correct' : 'Wrong'}</span></li>`;
+        }
+        if (m.kind === 'resign') {
+            return `<li class="move move-note"><span class="move-q">Resigned</span></li>`;
+        }
+        return '';   // 'joined' is structural, not a move worth a card
+    }
+
     function renderFeed(moves) {
-        const html = moves.map(m => {
-            const who = m.mine ? 'You' : 'They';
-            if (m.kind === 'joined') return `<li class="qa-entry qa-skip"><span class="qa-q">Opponent joined</span></li>`;
-            if (m.kind === 'question') {
-                return `<li class="qa-entry qa-${esc(m.payload.answer)}">
-                    <span class="qa-q">${esc(who)} asked: ${esc(m.payload.question)}</span>
-                    <span class="qa-a">${m.payload.answer === 'yes' ? 'Yes' : 'No'}</span></li>`;
-            }
-            if (m.kind === 'guess') {
-                return `<li class="qa-entry qa-${m.payload.correct ? 'yes' : 'no'}">
-                    <span class="qa-q">${esc(who)} guessed ${esc(m.payload.name)}</span>
-                    <span class="qa-a">${m.payload.correct ? 'Correct' : 'Wrong'}</span></li>`;
-            }
-            if (m.kind === 'resign') return `<li class="qa-entry qa-skip"><span class="qa-q">${esc(who)} resigned</span></li>`;
-            return '';
-        }).join('');
-        $('feed').innerHTML = html;
-        $('feed').scrollTop = $('feed').scrollHeight;
+        // Split by author rather than listing chronologically. Each column is
+        // one player's line of enquiry, which is what you actually reason about
+        // — your own deductions on the left, theirs on the right.
+        const mine = moves.filter(m => m.mine && m.kind !== 'joined');
+        const theirs = moves.filter(m => !m.mine && m.kind !== 'joined');
+
+        $('feed-you').innerHTML = mine.map(moveCard).join('');
+        $('feed-them').innerHTML = theirs.map(moveCard).join('');
+        $('feed-empty').classList.toggle(
+            'hidden', mine.length > 0 || theirs.length > 0);
+
+        // Both tracks follow their own latest entry.
+        for (const id of ('feed-you feed-them').split(' ')) {
+            $(id).scrollTop = $(id).scrollHeight;
+        }
     }
 
     function renderFinished(s) {
@@ -305,10 +343,16 @@
         $('pvp-ask-btn').disabled = true;
         const r = await api(`/api/game/pvp/${matchId}/ask`, { question: q });
         if (r.error && r.unanswerable) {
+            // Never reached the opponent's cuber, so it costs no turn and the
+            // server has no record of it — it belongs in your own column only,
+            // and refresh() will drop it since it was never a move.
             const li = document.createElement('li');
-            li.className = 'qa-entry qa-skip';
-            li.innerHTML = `<span class="qa-q">${esc(q)}<span class="qa-interp">${esc(r.error)}</span></span>`;
-            $('feed').appendChild(li);
+            li.className = 'move move-note';
+            li.innerHTML = `<span class="move-q">${esc(q)}` +
+                           `<span class="move-note-why">${esc(r.error)}</span></span>`;
+            $('feed-you').appendChild(li);
+            $('feed-empty').classList.add('hidden');
+            return;   // nothing changed server-side, so don't re-fetch
         }
         refresh();
     });

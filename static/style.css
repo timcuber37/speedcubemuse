@@ -1746,8 +1746,6 @@ tr:hover td {
     margin-bottom: 14px;
 }
 
-.pvp-turn-you  { color: #16a34a; font-weight: 700; }
-.pvp-turn-them { color: #9ca3af; font-weight: 600; }
 
 #pvp-ask-btn {
     padding: 10px 18px;
@@ -1863,4 +1861,160 @@ tr:hover td {
     background: #f0f1f3;
     padding: 2px 6px;
     border-radius: 4px;
+}
+
+/* ---------------------------------------------------------------------------
+   Head to head — turn state and the two-track feed
+   --------------------------------------------------------------------------- */
+
+/* Whose turn it is is the one thing that must read instantly, so it gets a
+   full-width banner rather than a line of coloured text. */
+.turn-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: -28px -28px 18px;      /* bleed to the panel edges */
+    padding: 13px 28px;
+    border-radius: 14px 14px 0 0;
+    font-size: .95rem;
+    font-weight: 600;
+    border-bottom: 1px solid transparent;
+}
+
+.turn-banner .game-btn-link { margin-left: auto; font-weight: 500; }
+
+.turn-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: currentColor;
+}
+
+.turn-banner.is-yours {
+    background: rgba(22, 163, 74, .1);
+    border-bottom-color: rgba(22, 163, 74, .25);
+    color: #15803d;
+}
+
+/* A pulse only while it's your move — it's a prompt to act, and it stops the
+   moment the turn passes so it never becomes ambient noise. */
+.turn-banner.is-yours .turn-dot { animation: turn-pulse 1.8s ease-in-out infinite; }
+
+@keyframes turn-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, .5); }
+    50%      { box-shadow: 0 0 0 6px rgba(22, 163, 74, 0); }
+}
+
+.turn-banner.is-theirs {
+    background: #f0f1f3;
+    border-bottom-color: #e2e5ea;
+    color: #6b7280;
+}
+
+/* Waiting: the controls stay visible so the layout doesn't jump, but read as
+   unavailable rather than merely unresponsive. */
+#match.awaiting .ask-form,
+#match.awaiting .guess-bar {
+    opacity: .45;
+    filter: grayscale(1);
+    pointer-events: none;
+}
+
+.turn-lock {
+    text-align: center;
+    font-size: .85rem;
+    color: #9ca3af;
+    margin-top: 10px;
+}
+
+/* -- two tracks -- */
+
+.feed-grid {
+    display: grid;
+    /* Each track wraps its own heading and list, so stacking on a phone keeps
+       the heading with the column it labels. */
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.feed-track { min-width: 0; }
+
+.feed-head {
+    font-size: .72rem;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    padding: 0 0 7px;
+    border-bottom: 2px solid;
+    margin-bottom: 9px;
+}
+
+.feed-head-you  { color: #4f6ef7; border-bottom-color: #4f6ef7; }
+.feed-head-them { color: #9ca3af; border-bottom-color: #e2e5ea; }
+
+.feed-col {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.move {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: #f8f9fb;
+    border-left: 3px solid #e2e5ea;
+    font-size: .88rem;
+    line-height: 1.4;
+}
+
+.move-q { color: #374151; }
+
+.move-a {
+    font-weight: 700;
+    font-size: .8rem;
+    white-space: nowrap;
+}
+
+.move-yes  { border-left-color: #16a34a; }
+.move-yes  .move-a { color: #16a34a; }
+.move-no   { border-left-color: #dc2626; }
+.move-no   .move-a { color: #dc2626; }
+.move-win  { border-left-color: #16a34a; background: rgba(22, 163, 74, .1); }
+.move-win  .move-a { color: #15803d; }
+.move-miss { border-left-color: #dc2626; }
+.move-miss .move-a { color: #dc2626; }
+
+.move-note { border-left-color: #e2e5ea; color: #9ca3af; }
+.move-note-why {
+    display: block;
+    font-size: .78rem;
+    color: #9ca3af;
+    margin-top: 3px;
+}
+
+.feed-empty {
+    text-align: center;
+    color: #9ca3af;
+    font-size: .88rem;
+    padding: 6px 0 14px;
+}
+
+@media (max-width: 600px) {
+    .turn-banner { margin: -20px -20px 16px; padding: 12px 20px; font-size: .88rem; }
+    /* Two ~160px columns on a phone would clip the questions, so the tracks
+       stack — each keeping its own heading. */
+    .feed-grid { grid-template-columns: 1fr; gap: 18px; }
+    .feed-col { max-height: 200px; }
 }

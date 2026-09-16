@@ -16,8 +16,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / 'scripts'))
 
-from build_cuber_profiles import (RECENCY_FLOOR, fame_score,  # noqa: E402
-                                  recency_weight)
+from build_cuber_profiles import (RANK_BANDS, RECENCY_FLOOR,  # noqa: E402
+                                  fame_score, rank_band_weight, recency_weight)
 
 from services.game.attributes import (ATTRIBUTES, BY_KEY, EVENT_GROUPS,
                                       EVENT_NAMES, EVENT_TIERS, event_weight,
@@ -314,6 +314,54 @@ def test_unlisted_events_get_the_lowest_weight():
     assert event_weight('a-brand-new-event') == event_weight('555bf')
 
 
+def test_rank_bands_descend_and_cut_off():
+    """Top 25 beats top 100 beats top 500; past 500 is worth nothing."""
+    assert rank_band_weight(1) == rank_band_weight(25) > rank_band_weight(26)
+    assert rank_band_weight(26) == rank_band_weight(100) > rank_band_weight(101)
+    assert rank_band_weight(101) == rank_band_weight(500) > rank_band_weight(501)
+    assert rank_band_weight(501) == 0.0
+    assert rank_band_weight(50_000) == 0.0
+
+
+def test_top_100_band_keeps_its_original_weight():
+    """Adding the new bands must not re-scale what was already scored.
+
+    The 100 band was the only ranking term before, at 1.0. Changing it would
+    silently shift every existing score rather than adding to it.
+    """
+    assert rank_band_weight(100) == 1.0
+
+
+def test_rank_bands_are_exclusive_not_cumulative():
+    """An event counts once, at its best band — a top-25 is not 3.0+1.0+0.3."""
+    total = sum(w for _t, w in RANK_BANDS)
+    assert rank_band_weight(1) < total, (
+        'a top-25 ranking is scoring the sum of every band it qualifies for'
+    )
+
+
+def test_an_elite_ranking_outscores_a_deep_one():
+    """Combined with the event weight, as the score actually uses it."""
+    top25_headline = event_weight('333') * rank_band_weight(10)
+    top100_headline = event_weight('333') * rank_band_weight(60)
+    top500_niche = event_weight('555bf') * rank_band_weight(300)
+    assert top25_headline > top100_headline > top500_niche > 0
+    assert top25_headline / top500_niche > 20
+
+
+def test_rank_bands_do_not_change_pool_eligibility(profiles):
+    """Top-500 is a scoring criterion only.
+
+    Admitting every top-500 competitor would take the elite pool from ~1,800 to
+    tens of thousands, which is a different feature from rewarding depth.
+    """
+    for row in (r for r in profiles if r['tier'] in ELITE_TIERS):
+        a = row['attrs']
+        assert a['has_cr_or_better'] or a['top100_event_count'] > 0, (
+            f'{row["wca_id"]} is in the elite pool on a weaker ranking than top 100'
+        )
+
+
 def test_recent_achievements_outweigh_old_ones():
     year = 2026
     fresh = recency_weight(year, year)
@@ -359,6 +407,49 @@ def test_weighting_inputs_never_leak_into_attributes(profiles):
     for row in profiles[:500]:
         leaked = [k for k in row['attrs'] if k.startswith('_')]
         assert not leaked, f'{row["wca_id"]} carries fame inputs as attrs: {leaked}'
+
+
+# Events the WCA has retired, identified in the export by `events.rank >= 900`.
+# Their ranking rows never expire, and because so few people ever competed in
+# them a dead-event rank is often someone's numerically best.
+DISCONTINUED = {'333ft', 'magic', 'mmagic', '333mbo'}
+
+
+def test_best_event_is_never_a_discontinued_one(profiles):
+    """Nobody's headline event should be one the WCA stopped running.
+
+    Before this, 26% of the elite pool led with a dead event — Erik Akkersdijk
+    showed as a Multi-Blind (old style) specialist.
+    """
+    bad = [(r['wca_id'], r['name'], r['attrs']['main_event'])
+           for r in profiles if r['attrs']['main_event'] in DISCONTINUED]
+    assert not bad, f'{len(bad)} profiles lead with a retired event, e.g. {bad[:3]}'
+
+
+def test_current_rankings_exclude_discontinued_events(profiles):
+    """"Currently top 100" must mean an event that currently runs.
+
+    Rankings in a retired event are frozen, so counting them would let someone
+    claim a standing in a competition that has not been held in a decade — and
+    they feed the fame score through `top100_event_count`.
+    """
+    bad = [r['wca_id'] for r in profiles
+           if any(e in DISCONTINUED for e in (r['attrs']['top100_events'] or ()))]
+    assert not bad, f'{len(bad)} profiles are ranked in a retired event'
+
+
+def test_specialist_flags_follow_the_corrected_best_event(profiles):
+    """The derived flags must track main_event, including when it is absent.
+
+    A handful of competitors only ever ranked in retired events, so they have no
+    current best event at all — none of them may read as a specialist.
+    """
+    keys = ('is_bld_specialist', 'is_bigcube_specialist', 'is_sideevent_specialist',
+            'is_fmc_specialist', 'is_oh_specialist')
+    for row in profiles:
+        if row['attrs']['main_event'] is None:
+            assert not any(row['attrs'][k] for k in keys), row['wca_id']
+            assert row['attrs']['main_event_group'] is None, row['wca_id']
 
 
 def test_every_event_in_the_data_has_a_display_name(profiles):

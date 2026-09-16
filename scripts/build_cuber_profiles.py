@@ -88,6 +88,25 @@ TIER_LONG_TAIL = 5
 RECENCY_HALF_LIFE = 5.0
 RECENCY_FLOOR = 0.20
 
+# What a current world ranking is worth, by how high it is. Bands are
+# exclusive — an event counts once, at the best band it reaches, so a top-25
+# finish scores 3.0 rather than 3.0 + 1.0 + 0.3 stacked.
+#
+# The 100 band keeps its original weight of 1.0, so this adds a reward for
+# elite rankings and a small one for depth without re-scaling what was already
+# there. These are scoring bands only: pool eligibility still needs a top 100
+# or a record, since admitting every top-500 would take the pool from ~1,800
+# to tens of thousands.
+RANK_BANDS = ((25, 3.0), (100, 1.0), (500, 0.3))
+
+
+def rank_band_weight(world_rank: int) -> float:
+    """Score multiplier for one event's current world ranking."""
+    for threshold, weight in RANK_BANDS:
+        if world_rank <= threshold:
+            return weight
+    return 0.0
+
 
 def recency_weight(year: int, current_year: int) -> float:
     """Decay an achievement by how long ago it happened."""
@@ -119,7 +138,7 @@ def _fetch(cur, sql, args=None):
 # Step 1 — the eligible pool
 # ---------------------------------------------------------------------------
 
-def build_pool(cur) -> set[str]:
+def build_pool(cur, current_events: set[str]) -> set[str]:
     """Stage the profile pool and return the record/top-100 subset.
 
     Two groups go in. The *elite* — a continental record or better, or a current
@@ -151,10 +170,18 @@ def build_pool(cur) -> set[str]:
     )
     log.info('  record holders: %d', cur.rowcount)
 
+    # Retired events are excluded here for the same reason they are excluded
+    # from the attributes: a frozen top-100 in an event the WCA no longer runs
+    # is not a current standing. Leaving them in admitted people to the elite
+    # pool who then satisfied none of its own criteria.
+    events_in = ', '.join(['%s'] * len(current_events))
+    ordered = sorted(current_events)
     for table in ('ranks_single', 'ranks_average'):
         cur.execute(
             f'INSERT IGNORE INTO `{POOL_TABLE}` (person_id) '
-            f'SELECT DISTINCT person_id FROM `{table}` WHERE world_rank <= 100'
+            f'SELECT DISTINCT person_id FROM `{table}` '
+            f'WHERE world_rank <= 100 AND event_id IN ({events_in})',
+            tuple(ordered),
         )
         log.info('  + top-100 from %s: %d new', table, cur.rowcount)
 
@@ -294,7 +321,19 @@ def fetch_career(cur) -> dict[str, dict]:
     }
 
 
-def fetch_rankings(cur) -> dict[str, dict]:
+def fetch_current_events(cur) -> set[str]:
+    """Event ids the WCA still runs.
+
+    `rank >= 900` is how the export marks a retired event, and the same test
+    already produces the "17 events" figure on the About page. Reading it rather
+    than hardcoding a list means an event retired in a future export drops out
+    on its own.
+    """
+    rows = _fetch(cur, 'SELECT id FROM `events` WHERE `rank` < 900')
+    return {r[0] for r in rows}
+
+
+def fetch_rankings(cur, current_events: set[str]) -> dict[str, dict]:
     """Current world ranks, collapsed to the facts the game asks about.
 
     Single and average ranks are unioned and reduced to each person's best rank
@@ -328,15 +367,32 @@ def fetch_rankings(cur) -> dict[str, dict]:
         )
 
     out = {}
-    for pid, ranks in by_person.items():
-        best_event, best_rank = min(((e, w) for e, w, _c, _n in ranks),
-                                    key=lambda er: er[1])
-        group = group_of(best_event)
+    for pid, all_ranks in by_person.items():
+        # Retired events are dropped before anything here is derived. Every
+        # attribute below is a claim about the present — "currently top 100",
+        # "currently holds a world record" — and a frozen ranking in an event
+        # the WCA stopped running satisfies none of them. Because so few people
+        # ever competed in those events, their ranks are often a person's
+        # numerically best: Erik Akkersdijk came out as a Multi-Blind (old
+        # style) specialist, and 26% of the elite pool led with a dead event.
+        ranks = [r for r in all_ranks if r[0] in current_events]
+
+        best_event, best_rank = (
+            min(((e, w) for e, w, _c, _n in ranks), key=lambda er: er[1])
+            if ranks else (None, 10 ** 9)
+        )
+        group = group_of(best_event) if best_event else None
         out[pid] = {
             'main_event': best_event,
             'main_event_group': group,
             'top100_events': sorted(e for e, w, _c, _n in ranks if w <= 100),
             'top100_event_count': sum(1 for _e, w, _c, _n in ranks if w <= 100),
+            # Fame input: every current ranking, scored by how high it is and
+            # how followed the event is. Kept out of the attributes because
+            # top-25 / top-100 / top-500 are nested — offering all three as
+            # questions would mean asking "top 100?" after "top 25? yes".
+            '_rank_weighted': sum(
+                event_weight(e) * rank_band_weight(w) for e, w, _c, _n in ranks),
             'top10_any': best_rank <= 10,
             'currently_wr': best_rank == 1,
             # Fame input: how much attention the event they lead actually gets.
@@ -459,6 +515,7 @@ def assemble(sources: dict[str, dict[str, dict]], total_events: int,
             'wr_weighted': attrs.pop('_wr_weighted', 0.0),
             'cr_weighted': attrs.pop('_cr_weighted', 0.0),
             'current_wr_weight': attrs.pop('_current_wr_weight', 0.0),
+            'rank_weighted': attrs.pop('_rank_weighted', 0.0),
         }
 
         # Defaults for anyone a family had no row for — a cuber with no ranks
@@ -510,9 +567,9 @@ def fame_score(attrs: dict, fame_inputs: dict, current_year: int) -> int:
         + 3.0 * fame_inputs.get('cr_weighted', 0.0)
         + 2.0 * fame_inputs.get('podium_weighted', 0.0)
         + 1.5 * math.log10(attrs.get('total_results', 0) + 1)
-        # Being currently ranked is weighted by event too: top 100 in 3x3 is a
-        # different achievement from top 100 in 5BLD.
-        + 1.0 * sum(event_weight(e) for e in (attrs.get('top100_events') or ()))
+        # Current rankings, banded by how high and scaled by event: top 25 in
+        # 3x3 is a different achievement from top 500 in 5BLD.
+        + 1.0 * fame_inputs.get('rank_weighted', 0.0)
     )
     last_year = attrs.get('last_year', 0)
     if last_year >= current_year - 1:
@@ -641,11 +698,10 @@ def run(dry_run: bool = False) -> None:
     conn = get_connection()
     try:
         cur = conn.cursor()
-        elite = build_pool(cur)
+        current_events = fetch_current_events(cur)
+        elite = build_pool(cur, current_events)
 
-        total_events = _fetch(
-            cur, 'SELECT COUNT(*) FROM `events` WHERE `rank` < 900'
-        )[0][0]
+        total_events = len(current_events)
 
         current_year = datetime.now().year
         log.info('Computing attribute families...')
@@ -653,7 +709,7 @@ def run(dry_run: bool = False) -> None:
             'identity': fetch_identity(cur),
             'records': fetch_records(cur),
             'career': fetch_career(cur),
-            'rankings': fetch_rankings(cur),
+            'rankings': fetch_rankings(cur, current_events),
             'bests': fetch_personal_bests(cur),
             'worlds': fetch_worlds(cur, current_year),
             'weighted': fetch_weighted_records(cur, current_year),
