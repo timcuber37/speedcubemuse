@@ -22,10 +22,17 @@ CREATE TABLE IF NOT EXISTS game_matches (
     difficulty  TEXT        NOT NULL DEFAULT 'normal',
     host_user   UUID        NOT NULL REFERENCES auth.users (id) ON DELETE CASCADE,
     guest_user  UUID        REFERENCES auth.users (id) ON DELETE CASCADE,
+    -- 'rebuttal': someone has named their opponent's cuber correctly and the
+    -- opponent has one guess to level it. `winner` holds the pending winner for
+    -- the duration, and is cleared if the rebuttal lands.
     status      TEXT        NOT NULL DEFAULT 'waiting'
-                CHECK (status IN ('waiting', 'active', 'finished', 'abandoned')),
+                CONSTRAINT game_matches_status_check
+                CHECK (status IN ('waiting', 'active', 'rebuttal',
+                                  'finished', 'abandoned')),
     turn        UUID,       -- whose turn it is; NULL until both players are in
-    winner      UUID,
+    winner      UUID,       -- NULL on a draw
+    outcome     TEXT        CONSTRAINT game_matches_outcome_check
+                CHECK (outcome IN ('win', 'tie', 'resign')),
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -53,12 +60,42 @@ CREATE TABLE IF NOT EXISTS game_moves (
     match_id    UUID        NOT NULL REFERENCES game_matches (id) ON DELETE CASCADE,
     actor       UUID        NOT NULL REFERENCES auth.users (id)   ON DELETE CASCADE,
     kind        TEXT        NOT NULL
-                CHECK (kind IN ('joined', 'question', 'guess', 'win', 'resign')),
+                CONSTRAINT game_moves_kind_check
+                CHECK (kind IN ('joined', 'question', 'guess', 'rebuttal',
+                                'win', 'tie', 'resign')),
     payload     JSONB       NOT NULL DEFAULT '{}'::JSONB,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS game_moves_match_idx ON game_moves (match_id, id);
+
+-- ---------------------------------------------------------------------------
+-- Bring an existing database up to date
+-- ---------------------------------------------------------------------------
+--
+-- `CREATE TABLE IF NOT EXISTS` above does nothing to a table that already
+-- exists, so a database created before the rebuttal rule keeps its old shape
+-- and re-running this file would report success while changing nothing. These
+-- statements are what actually applies the change, and they are safe on a
+-- fresh database too — the whole file is idempotent, so run it as often as you
+-- like.
+
+ALTER TABLE game_matches ADD COLUMN IF NOT EXISTS outcome TEXT;
+
+-- DROP-then-ADD because ADD CONSTRAINT has no IF NOT EXISTS. Dropping a
+-- constraint validates nothing and rewrites nothing, so this is cheap.
+ALTER TABLE game_matches DROP CONSTRAINT IF EXISTS game_matches_status_check;
+ALTER TABLE game_matches ADD  CONSTRAINT game_matches_status_check
+    CHECK (status IN ('waiting', 'active', 'rebuttal', 'finished', 'abandoned'));
+
+ALTER TABLE game_matches DROP CONSTRAINT IF EXISTS game_matches_outcome_check;
+ALTER TABLE game_matches ADD  CONSTRAINT game_matches_outcome_check
+    CHECK (outcome IN ('win', 'tie', 'resign'));
+
+ALTER TABLE game_moves DROP CONSTRAINT IF EXISTS game_moves_kind_check;
+ALTER TABLE game_moves ADD  CONSTRAINT game_moves_kind_check
+    CHECK (kind IN ('joined', 'question', 'guess', 'rebuttal',
+                    'win', 'tie', 'resign'));
 
 -- ---------------------------------------------------------------------------
 -- Row Level Security

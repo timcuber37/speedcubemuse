@@ -58,12 +58,18 @@ def is_ready() -> bool:
         return _ready
 
     try:
-        client.table('game_matches').select('id').limit(1).execute()
+        # `outcome` arrived with the rebuttal rule, so selecting it checks both
+        # that the tables exist and that the schema is current. Probing only
+        # for the table would pass on a database created before that change and
+        # then fail mid-match on a CHECK violation the first time someone
+        # guessed correctly — a much worse failure than being told up front.
+        client.table('game_matches').select('id, outcome').limit(1).execute()
         _ready = True
     except Exception as e:
         logger.warning(
-            'head-to-head disabled: %s. Run supabase_game_setup.sql to enable it.',
-            str(e)[:120],
+            'head-to-head disabled: %s. Run supabase_game_setup.sql to create '
+            'or update the match tables.',
+            str(e)[:140],
         )
         _ready = False
     return _ready
@@ -192,7 +198,7 @@ def _opponent(match: dict, user_id: str) -> str:
 
 
 def _require_turn(match: dict, user_id: str) -> None:
-    if match['status'] != 'active':
+    if match['status'] not in ('active', 'rebuttal'):
         raise PvpError('This match is not in play.')
     if match['turn'] != user_id:
         raise PvpError("It's not your turn.")
@@ -202,6 +208,10 @@ def ask(match_id: str, user_id: str, pred: Predicate) -> dict:
     """Answer a question about the opponent's cuber and pass the turn back."""
     match = _load_match(match_id, user_id)
     _require_turn(match, user_id)
+    if match['status'] == 'rebuttal':
+        # The rebuttal is one guess, not a free turn. Letting it buy questions
+        # would hand the trailing player information the winner never had.
+        raise PvpError('Last chance — name their cuber, no more questions.')
 
     opponent = _opponent(match, user_id)
     secret = _get_secret(match_id, opponent)
@@ -239,23 +249,44 @@ def guess(match_id: str, user_id: str, wca_id: str) -> dict:
         'correct': correct,
     })
 
+    # The rebuttal itself: the trailing player's single chance to level it.
+    if match['status'] == 'rebuttal':
+        if correct:
+            _finish(match_id, winner=None, outcome='tie')
+            _record_move(match_id, user_id, 'tie', {'name': secret['name']})
+            return {'correct': True, 'tie': True, 'secret': _reveal(secret)}
+
+        # Missed it, so the guess that triggered the rebuttal stands.
+        _finish(match_id, winner=match['winner'], outcome='win')
+        _record_move(match_id, match['winner'], 'win', {})
+        return {'correct': False, 'rebuttal_failed': True}
+
     if correct:
+        # Not over yet. They get one guess to tie, and `winner` holds this
+        # player as the pending winner until that resolves.
         _client().table('game_matches').update({
-            'status': 'finished', 'winner': user_id, 'turn': None,
+            'status': 'rebuttal', 'winner': user_id, 'turn': opponent,
         }).eq('id', match_id).execute()
-        _record_move(match_id, user_id, 'win', {'name': secret['name']})
-        return {'correct': True, 'secret': _reveal(secret)}
+        _record_move(match_id, user_id, 'rebuttal', {'name': secret['name']})
+        return {'correct': True, 'awaiting_rebuttal': True,
+                'secret': _reveal(secret)}
 
     _pass_turn(match_id, opponent)
     return {'correct': False}
 
 
+def _finish(match_id: str, winner: str | None, outcome: str) -> None:
+    _client().table('game_matches').update({
+        'status': 'finished', 'winner': winner, 'outcome': outcome, 'turn': None,
+    }).eq('id', match_id).execute()
+
+
 def resign(match_id: str, user_id: str) -> dict:
     match = _load_match(match_id, user_id)
     opponent = _opponent(match, user_id)
-    _client().table('game_matches').update({
-        'status': 'finished', 'winner': opponent, 'turn': None,
-    }).eq('id', match_id).execute()
+    # Conceding during a rebuttal is declining to take it, so the pending
+    # winner's guess stands either way — the opponent wins in both cases.
+    _finish(match_id, winner=opponent, outcome='resign')
     _record_move(match_id, user_id, 'resign', {})
 
     secret = _get_secret(match_id, opponent)
@@ -273,6 +304,7 @@ def state(match_id: str, user_id: str) -> dict:
         .eq('match_id', match_id).order('id').execute().data or []
 
     mine = _get_secret(match_id, user_id)
+    in_rebuttal = match['status'] == 'rebuttal'
     return {
         'id': match['id'],
         'join_code': match['join_code'],
@@ -282,7 +314,14 @@ def state(match_id: str, user_id: str) -> dict:
         'your_turn': match['turn'] == user_id,
         'waiting_for_opponent': match['guest_user'] is None,
         'winner': match['winner'],
-        'you_won': match['winner'] == user_id if match['winner'] else None,
+        'outcome': match.get('outcome'),
+        'tie': match.get('outcome') == 'tie',
+        # During a rebuttal `winner` is only provisional, so "did you win" has
+        # no answer yet — the client shows the last-chance state instead.
+        'you_won': (None if in_rebuttal or not match['winner']
+                    else match['winner'] == user_id),
+        'awaiting_rebuttal': in_rebuttal,
+        'your_rebuttal': in_rebuttal and match['turn'] == user_id,
         'your_cuber': _reveal(mine) if mine else None,
         'moves': [
             {

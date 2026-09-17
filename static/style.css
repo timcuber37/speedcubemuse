@@ -2018,3 +2018,48 @@ tr:hover td {
     .feed-grid { grid-template-columns: 1fr; gap: 18px; }
     .feed-col { max-height: 200px; }
 }
+
+/* Rebuttal — the trailing player's one guess to level the match.
+   Deliberately not green or grey: it is neither a normal turn nor a normal
+   wait, and reading it as either would understate what's at stake. */
+.turn-banner.is-rebuttal {
+    background: rgba(200, 16, 46, .1);
+    border-bottom-color: rgba(200, 16, 46, .3);
+    color: #a60d24;
+}
+
+.turn-banner.is-rebuttal .turn-dot {
+    animation: turn-pulse-urgent 1s ease-in-out infinite;
+}
+
+@keyframes turn-pulse-urgent {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(200, 16, 46, .55); }
+    50%      { box-shadow: 0 0 0 7px rgba(200, 16, 46, 0); }
+}
+
+/* The pending winner's side: they have done the work and are waiting to find
+   out whether it held. */
+.turn-banner.is-pending {
+    background: rgba(184, 134, 11, .12);
+    border-bottom-color: rgba(184, 134, 11, .3);
+    color: #8a6508;
+}
+
+/* No questions during a rebuttal — hide the ask bar rather than leave a dead
+   control sitting there. */
+#match.rebuttal-only .ask-form { display: none; }
+
+/* The guess box is the only thing left to use, so it gets the emphasis the
+   banner would otherwise carry alone. */
+#match.rebuttal-only .guess-bar input {
+    border-color: #c8102e;
+    box-shadow: 0 0 0 3px rgba(200, 16, 46, .12);
+}
+
+#match.awaiting.rebuttal-only .guess-bar { opacity: .45; }
+
+.move-tie {
+    border-left-color: #b8860b;
+    background: rgba(184, 134, 11, .1);
+}
+.move-tie .move-a { color: #8a6508; }

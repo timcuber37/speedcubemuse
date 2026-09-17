@@ -265,18 +265,35 @@
             ? `You're hiding ${s.your_cuber.name}` : '';
 
         // Whose turn it is drives the whole panel, not just a line of text —
-        // this is the one thing a player needs to read at a glance.
-        $('turn-text').textContent = s.your_turn
-            ? 'Your turn — ask a question or name their cuber'
-            : 'Their turn';
-        $('turn-banner').className =
-            'turn-banner ' + (s.your_turn ? 'is-yours' : 'is-theirs');
-        $('match').classList.toggle('awaiting', !s.your_turn);
-        $('turn-lock').classList.toggle('hidden', s.your_turn);
+        // this is the one thing a player needs to read at a glance. The
+        // rebuttal is its own state, not a normal turn, and reads as one.
+        const rebuttal = s.awaiting_rebuttal;
+        const mine = s.your_turn;
 
-        $('question').disabled = !s.your_turn;
-        $('pvp-ask-btn').disabled = !s.your_turn;
-        $('guess-input').disabled = !s.your_turn;
+        $('turn-text').textContent =
+            rebuttal && mine  ? 'Last chance — name their cuber to tie it'
+          : rebuttal          ? 'They guessed yours. One chance to tie…'
+          : mine              ? 'Your turn — ask a question or name their cuber'
+          :                     'Their turn';
+
+        $('turn-banner').className = 'turn-banner ' + (
+            rebuttal && mine ? 'is-rebuttal'
+          : rebuttal         ? 'is-pending'
+          : mine             ? 'is-yours' : 'is-theirs');
+
+        $('match').classList.toggle('awaiting', !mine);
+        // Questions are closed during a rebuttal: it is one guess, not a turn.
+        $('match').classList.toggle('rebuttal-only', rebuttal);
+        $('turn-lock').classList.toggle('hidden', mine);
+        $('turn-lock').textContent = rebuttal
+            ? 'Waiting on their last guess.'
+            : 'Waiting for your opponent to move.';
+
+        $('question').disabled = !mine || rebuttal;
+        $('pvp-ask-btn').disabled = !mine || rebuttal;
+        $('guess-input').disabled = !mine;
+        $('guess-input').placeholder = rebuttal && mine
+            ? 'Name their cuber — one guess…' : 'Name their cuber…';
 
         renderFeed(s.moves);
     }
@@ -293,18 +310,28 @@
                 <span class="move-q">Guessed ${esc(m.payload.name)}</span>
                 <span class="move-a">${m.payload.correct ? 'Correct' : 'Wrong'}</span></li>`;
         }
+        if (m.kind === 'rebuttal') {
+            return `<li class="move move-win">
+                <span class="move-q">Named ${esc(m.payload.name)} — opponent gets one chance to tie</span></li>`;
+        }
+        if (m.kind === 'tie') {
+            return `<li class="move move-tie">
+                <span class="move-q">Levelled it with ${esc(m.payload.name)}</span>
+                <span class="move-a">Tie</span></li>`;
+        }
         if (m.kind === 'resign') {
             return `<li class="move move-note"><span class="move-q">Resigned</span></li>`;
         }
-        return '';   // 'joined' is structural, not a move worth a card
+        return '';   // 'joined' and 'win' are structural, not cards
     }
 
     function renderFeed(moves) {
         // Split by author rather than listing chronologically. Each column is
         // one player's line of enquiry, which is what you actually reason about
         // — your own deductions on the left, theirs on the right.
-        const mine = moves.filter(m => m.mine && m.kind !== 'joined');
-        const theirs = moves.filter(m => !m.mine && m.kind !== 'joined');
+        const shown = m => !['joined', 'win'].includes(m.kind);
+        const mine = moves.filter(m => m.mine && shown(m));
+        const theirs = moves.filter(m => !m.mine && shown(m));
 
         $('feed-you').innerHTML = mine.map(moveCard).join('');
         $('feed-them').innerHTML = theirs.map(moveCard).join('');
@@ -322,9 +349,13 @@
         hide('waiting');
         show('result');
         const won = s.you_won;
+        const headline = s.tie ? 'Tied.' : won ? 'You win.' : 'You lost this one.';
+        const note = s.tie
+            ? '<p class="guess-lead">You both named each other\'s cuber.</p>' : '';
         $('result').innerHTML = `
             <div class="guess-card">
-                <h2>${won ? 'You win.' : 'You lost this one.'}</h2>
+                <h2>${headline}</h2>
+                ${note}
                 <div class="avatar-slot" id="mine-avatar"></div>
                 ${s.your_cuber ? `<p class="guess-meta">You were hiding ${esc(s.your_cuber.name)}.</p>` : ''}
                 <button class="game-btn game-btn-primary" onclick="location.href='/game/pvp'">New match</button>
