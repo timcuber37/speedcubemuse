@@ -3,10 +3,15 @@ name: Deploy to Fly.io
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-speedcubemuse
+  cancel-in-progress: false
 
 jobs:
-  deploy-web:
-    name: Deploy web app
+  deploy:
+    name: Deploy website and Discord bot
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,20 +19,8 @@ jobs:
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
       - name: Deploy
-        run: flyctl deploy --remote-only
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-
-  deploy-bot:
-    name: Deploy Discord bot
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: superfly/flyctl-actions/setup-flyctl@master
-
-      - name: Deploy
-        # Repo root as build context so the bot image can copy services/ and config.py
-        run: flyctl deploy . --config delegate-bot/fly.toml --remote-only --ha=false
+        # The root config runs the website and bot as separate process groups.
+        # Avoid creating a second bot machine and duplicate Discord sessions.
+        run: flyctl deploy --config fly.toml --remote-only --ha=false
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

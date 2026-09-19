@@ -1,5 +1,6 @@
-# Build context is the repo root (deploy with:
-#   fly deploy . --config delegate-bot/fly.toml --remote-only --ha=false
+# Optional standalone bot image. The shared speedcubemuse deployment uses
+# the root Dockerfile instead. Build context is the repo root (deploy with:
+#   fly deploy . --config delegate-bot/fly.toml --dockerfile delegate-bot/Dockerfile --remote-only --ha=false
 # ) so services/ and config.py are shared with the web app without duplication.
 FROM python:3.12-slim
 

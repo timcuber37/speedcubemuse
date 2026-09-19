@@ -1,15 +1,18 @@
+# Optional standalone deployment; GitHub Actions uses the root fly.toml to run
+# both processes under speedcubemuse. This separate app must be created first.
+#
 # Always-on Discord bot worker. No [http_service]: the bot only holds an
 # outbound gateway WebSocket, and without proxy-managed services the Fly proxy
 # never suspends the machine — it runs 24/7 regardless of web traffic.
 #
-# Keep exactly ONE machine (fly scale count 1): two machines would open two
-# gateway sessions on the same token and answer every command twice.
+# Keep exactly ONE machine: fly scale count 1 --app speedcubemuse-bot.
+# Multiple bot instances can produce duplicate Discord responses.
 
 app = 'speedcubemuse-bot'
 primary_region = 'iad'
 
-[build]
-  dockerfile = 'Dockerfile'  # resolved relative to this file → delegate-bot/Dockerfile
+# The deploy command selects --dockerfile delegate-bot/Dockerfile explicitly.
+# Both paths are relative to the repository root used as the build context.
 
 [[restart]]
   policy = 'always'

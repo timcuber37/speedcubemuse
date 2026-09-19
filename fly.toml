@@ -1,5 +1,4 @@
-# fly.toml app configuration file generated for wca-statbot on 2026-03-25T14:08:06-04:00
-#
+# Website and Discord bot share one Fly app, with a machine for each process.
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
@@ -8,17 +7,33 @@ primary_region = 'iad'
 
 [build]
 
+[processes]
+  # Keep the existing 'app' group name for the website.
+  app = 'gunicorn app:app --bind 0.0.0.0:8080 --workers 2 --timeout 120'
+  bot = 'python -u delegate-bot/bot.py'
+
 [http_service]
+  processes = ['app']
   internal_port = 8080
   force_https = true
-  # 'suspend' resumes from a memory snapshot in ~1-2s instead of a full cold
-  # boot; billed the same as 'stop' (rootfs storage only). Note the Discord
-  # bot is still offline while suspended — only web traffic wakes the machine.
+  # Only the website suspends when idle. The bot has no HTTP service, so
+  # Fly Proxy does not stop it when web traffic drops.
   auto_stop_machines = 'suspend'
   auto_start_machines = true
   min_machines_running = 0
 
+[[restart]]
+  processes = ['bot']
+  policy = 'always'
+
 [[vm]]
+  processes = ['app']
   memory = '512mb'
   cpus = 1
   memory_mb = 512
+
+[[vm]]
+  processes = ['bot']
+  memory = '256mb'
+  cpus = 1
+  cpu_kind = 'shared'

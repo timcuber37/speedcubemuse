@@ -4,8 +4,8 @@ import logging
 import sys
 from pathlib import Path
 
-# Local dev runs from the repo checkout where services/ and config.py live one
-# level up; in the Docker image everything is flat in /app so this is a no-op.
+# Local development and the shared Docker image keep services/ and config.py
+# one level up. The optional standalone bot image puts everything in /app.
 _repo_root = Path(__file__).resolve().parent.parent
 if (_repo_root / 'services').is_dir() and str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))

@@ -37,7 +37,7 @@ The database is refreshed automatically every Monday by the `Weekly WCA database
 - **WCA Database:** TiDB Serverless (MySQL-compatible)
 - **Auth & Saved Queries:** Supabase (PostgreSQL + Auth)
 - **Discord:** discord.py
-- **Deployment:** Fly.io (two apps: web + always-on bot), Docker, Gunicorn
+- **Deployment:** Fly.io (one app with separate website and bot machines), Docker, Gunicorn
 - **CI/CD:** GitHub Actions
 
 ## How It Works
@@ -270,11 +270,11 @@ The web interface provides:
 wca_statbot/
 ├── app.py                  # Flask web application
 ├── config.py               # Configuration management (shared by web + bot)
-├── delegate-bot/           # Discord bot — deployed as its own always-on Fly app
+├── delegate-bot/           # Discord bot — runs on its own machine in speedcubemuse
 │   ├── bot.py              # Bot entrypoint (!wca commands + /delegate slash command)
 │   ├── delegate.py         # Embed building + thread conversation history helpers
-│   ├── Dockerfile          # Bot image (built with the repo root as context)
-│   ├── fly.toml            # speedcubemuse-bot app config (no HTTP service; never suspends)
+│   ├── Dockerfile          # Optional standalone bot image; unused by GitHub Actions
+│   ├── fly.toml            # Optional separate-app config; unused by GitHub Actions
 │   └── requirements.txt    # Bot-only dependencies
 ├── blueprints/
 │   └── game.py             # Guess the Cuber routes (registered on the Flask app)
@@ -310,10 +310,10 @@ wca_statbot/
 │   └── test_game_api.py       # Token sealing + model-output validation
 ├── .github/
 │   └── workflows/
-│       ├── deploy.yml            # CI/CD (auto-deploys both Fly apps on push)
+│       ├── deploy.yml            # CI/CD (deploys website and bot together on push)
 │       └── update-database.yml   # Weekly WCA export refresh (Mondays 09:00 UTC)
-├── Dockerfile              # Web app container
-├── fly.toml                # speedcubemuse (web) Fly.io configuration
+├── Dockerfile              # Shared image for website and bot
+├── fly.toml                # speedcubemuse app: website and bot process groups
 ├── requirements.txt        # Python dependencies
 └── .env                    # Environment variables (not in git)
 ```
@@ -467,35 +467,78 @@ database is unreachable.
 
 ## Deployment
 
-Deployed on [Fly.io](https://fly.io) as **two apps**. Pushes to `main` automatically deploy both via GitHub Actions.
+The website and Discord bot run in the existing **`speedcubemuse` Fly.io app**.
+The root `fly.toml` defines two [process groups](https://fly.io/docs/launch/processes/),
+each with its own machine:
 
-- **`speedcubemuse`** — the Flask web app. Scale-to-zero (`auto_stop_machines = 'suspend'`); web traffic wakes it.
-- **`speedcubemuse-bot`** — the Discord bot. No HTTP service, so the machine never suspends and the bot stays online 24/7. Must run exactly **one** machine (two would open duplicate Discord gateway sessions and answer everything twice).
+| Process group | Runs | Memory | When idle |
+| --- | --- | --- | --- |
+| `app` | Flask website | 512 MB | Suspends; web traffic wakes it |
+| `bot` | Discord bot | 256 MB | Keeps running |
+
+Only `app` has an HTTP service. The bot has no service managed by Fly Proxy, so
+website inactivity does not stop it. Both machines use the root Docker image
+and share the app's runtime secrets.
+
+Pushes to `main` deploy both processes in one job using the existing
+`FLY_API_TOKEN` GitHub repository secret. The workflow can also be started from
+**Actions → Deploy to Fly.io → Run workflow**. A second Fly app or deploy token
+is not needed.
+
+### Move to the shared app setup
+
+1. Check the secrets on `speedcubemuse` with `fly secrets list --app speedcubemuse`.
+   The bot needs `DISCORD_TOKEN` plus the shared AI and database settings shown
+   below. Add any missing values before deploying. `DISCORD_TOKEN` is the
+   Discord bot token, separate from the Fly deployment token.
+
+2. Commit and push the changes to `main`, or deploy from the repository root:
+
+   ```bash
+   fly deploy --config fly.toml --remote-only --ha=false
+   ```
+
+   This keeps the website in its existing `app` process group and adds `bot`.
+   `--ha=false` prevents Fly from creating extra machines for redundancy; it
+   does not remove replicas that already exist.
+
+3. After deployment, set the counts to one website machine and one bot machine:
+
+   ```bash
+   fly scale count app=1 bot=1 --app speedcubemuse
+   fly status --app speedcubemuse
+   fly logs --app speedcubemuse
+   ```
+
+   The scale command removes extra replicas if there are any. Keep exactly one
+   bot machine to avoid duplicate Discord responses. Later deployments preserve
+   the machine counts.
+
+The previous bot deployment failed with `Error: app not found` because it
+targeted `speedcubemuse-bot`, which had not been created. The workflow now uses
+the existing app for both processes. The files in `delegate-bot/Dockerfile` and
+`delegate-bot/fly.toml` remain available for an optional separate-app setup;
+GitHub Actions does not use them.
+
+### Manual deployments and runtime secrets
 
 ```bash
-# Manual deploy — web app
-fly deploy
+# Manual deploy — website and bot together, from the repository root
+fly deploy --config fly.toml --remote-only --ha=false
 
-# Manual deploy — bot (run from the repo root; the root is the build context)
-fly deploy . --config delegate-bot/fly.toml --remote-only --ha=false
-
-# Web app secrets
+# Shared app secrets (replace placeholders with actual values)
 fly secrets set -a speedcubemuse \
+  DISCORD_TOKEN=... \
   ANTHROPIC_API_KEY=... \
   VOYAGE_API_KEY=... \
   DB_HOST=... DB_PORT=... DB_USER=... DB_PASSWORD=... DB_NAME=... DB_SSL=true \
   SUPABASE_URL=... SUPABASE_ANON_KEY=... SUPABASE_SERVICE_ROLE_KEY=... \
   WCA_CLIENT_ID=... WCA_CLIENT_SECRET=... WCA_REDIRECT_URI=... \
   SECRET_KEY=...
-
-# Bot secrets (no DISCORD_GUILD_ID in prod — commands sync globally)
-fly secrets set -a speedcubemuse-bot \
-  DISCORD_TOKEN=... \
-  ANTHROPIC_API_KEY=... \
-  VOYAGE_API_KEY=... \
-  DB_HOST=... DB_PORT=... DB_USER=... DB_PASSWORD=... DB_NAME=... DB_SSL=true \
-  SUPABASE_URL=... SUPABASE_ANON_KEY=...
 ```
+
+Leave `DISCORD_GUILD_ID` unset in production so slash commands sync globally.
+Existing secrets stay in place; only supply values you need to add or change.
 
 ### Weekly database refresh
 
