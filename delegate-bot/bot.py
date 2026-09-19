@@ -1,4 +1,4 @@
-"""SpeedCubeMuse Discord bot: WCA stats queries (!wca) + Ask a Delegate (/delegate)."""
+"""SpeedCubeMuse Discord bot: WCA results (/query) and rules (/delegate)."""
 import asyncio
 import logging
 import sys
@@ -157,24 +157,28 @@ async def handle_thread_followup(message: discord.Message):
         await message.reply("❌ Sorry, something went wrong answering that. Please try again.")
 
 
-# ---------------- WCA stats (prefix commands) ----------------
+# ---------------- WCA stats ----------------
 
-@bot.command(name='query', aliases=['q', 'ask'])
+@bot.hybrid_command(name='query', aliases=['q', 'ask'],
+                    description='Ask about WCA competitors, records, and results')
+@app_commands.describe(question='Your question about WCA competition results')
 async def query_wca(ctx, *, question: str):
     """
     Query WCA statistics using natural language.
 
-    Usage: !wca query <your question>
-    Example: !wca query What is the world record for 3x3?
+    Usage: /query question:<your question>
+    Example: /query question:What is the world record for 3x3?
     """
     logger.info(f"Query command invoked by {ctx.author} with question: {question}")
 
+    question = question.strip()
     if not question:
-        await ctx.send("Please provide a question! Usage: `!wca query <your question>`")
+        await ctx.send("Please enter a question, such as: Who has the fastest 3x3 single?")
         return
 
-    # Send "thinking" message
-    thinking_msg = await ctx.send("🤔 Processing your question...")
+    # Acknowledge slash commands before the AI and database calls begin.
+    await ctx.defer()
+    thinking_msg = await ctx.send("🤔 Looking up your question...")
 
     try:
         # Step 1: Translate to SQL and execute (retries once with the DB error on failure)
@@ -183,34 +187,30 @@ async def query_wca(ctx, *, question: str):
         logger.info(f"Generated SQL: {sql_query}")
 
         if not sql_query:
-            await thinking_msg.edit(content="❌ Could not generate a valid SQL query from your question.")
+            await thinking_msg.edit(content="❌ I couldn't understand that question. Try naming the event, competitor, or record you're interested in.")
             return
 
         if not results:
-            await thinking_msg.edit(content="❌ No results found for your query.")
+            await thinking_msg.edit(content="No matching results found. Try a different question.")
             return
 
         # Step 2: Format and send results
         formatted_results = wca_service.format_results(results, max_results=MAX_QUERY_RESULTS)
 
-        # Discord has a 2000 character limit per message
-        if len(formatted_results) > 2000:
-            # Split into multiple messages or use file upload
-            chunks = [formatted_results[i:i+1900] for i in range(0, len(formatted_results), 1900)]
-            for i, chunk in enumerate(chunks):
-                if i == 0:
-                    await thinking_msg.edit(content=f"```\n{chunk}\n```")
-                else:
-                    await ctx.send(f"```\n{chunk}\n```")
-        else:
-            await thinking_msg.edit(content=f"```\n{formatted_results}\n```")
+        # Leave room for code fences within Discord's 2000-character limit.
+        chunks = [formatted_results[i:i+1900] for i in range(0, len(formatted_results), 1900)]
+        for i, chunk in enumerate(chunks):
+            if i == 0:
+                await thinking_msg.edit(content=f"```\n{chunk}\n```")
+            else:
+                await ctx.send(f"```\n{chunk}\n```")
 
     except Exception as e:
         logger.error(f"Error processing query: {e}", exc_info=e)
-        await thinking_msg.edit(content=f"❌ An error occurred: {str(e)}")
+        await thinking_msg.edit(content="❌ Sorry, I couldn't look up those results. Please try again.")
 
 
-@bot.command(name='help', aliases=['h'])
+@bot.hybrid_command(name='help', aliases=['h'], description='See commands and example questions')
 async def help_command(ctx):
     """Show help information."""
     help_text = """
@@ -220,23 +220,24 @@ async def help_command(ctx):
 `/delegate <question>` - Ask about the WCA Regulations & Guidelines
   Answers cite the official regulations, and open a thread for follow-up questions.
 
-`!wca query <question>` - Ask a question about WCA statistics
+`/query <question>` - Ask about competitors, records, and results
   Examples:
-    - `!wca query What is the world record for 3x3?`
-    - `!wca query Who has the most world records?`
-    - `!wca query Show me the top 10 fastest times for 2x2`
+    - `/query question:What is the world record for 3x3?`
+    - `/query question:Who has the most world records?`
+    - `/query question:Show me the top 10 fastest times for 2x2`
 
-`!wca help` - Show this help message
+`/help` - Show this help message
+`/ping` - Check whether the bot is responding
 
 **Tips:**
 - Be specific in your questions
 - You can ask about records, rankings, competitions, and more
-- The bot translates your question to SQL and queries the WCA database
+- Choose a slash command, then enter your question in its question field
 """
     await ctx.send(help_text)
 
 
-@bot.command(name='ping')
+@bot.hybrid_command(name='ping', description='Check whether the bot is responding')
 async def ping(ctx):
     """Check if the bot is responsive."""
     logger.info(f"Ping command invoked by {ctx.author}")

@@ -241,11 +241,13 @@ The web interface provides:
 | Command | Description |
 |---------|-------------|
 | `/delegate <question>` | Ask about the WCA Regulations & Guidelines (opens a thread for follow-ups) |
-| `!wca query <question>` | Ask a question about WCA data |
-| `!wca q <question>` | Short alias for query |
-| `!wca ask <question>` | Another alias for query |
-| `!wca help` | Show available commands |
-| `!wca ping` | Check bot latency |
+| `/query <question>` | Ask about competitors, records, and results |
+| `/help` | Show commands and example questions |
+| `/ping` | Check whether the bot is responding |
+
+Choose `/query` or `/delegate` from Discord's command menu, then fill in the
+`question` field. Existing `!wca query`, `!wca q`, `!wca ask`, `!wca help`, and
+`!wca ping` commands still work.
 
 `/delegate` answers cite the official regulations inline (e.g. `[9b1]`) with links to the source text, and each answer opens a thread where follow-up questions keep the conversation context.
 
@@ -254,7 +256,7 @@ The web interface provides:
 1. Use the [invite link](https://discord.com/oauth2/authorize?client_id=1450571905043267594&permissions=309237730304&scope=bot%20applications.commands) to add the bot
 2. Select your server (requires **Manage Server** permissions)
 3. Authorize the requested permissions (slash commands, sending messages, embeds, and threads)
-4. Type `/delegate` or `!wca query` followed by your question in any text channel
+4. Choose `/query` for results or `/delegate` for rules, then enter your question
 
 ## Example Questions
 
@@ -271,7 +273,7 @@ wca_statbot/
 ├── app.py                  # Flask web application
 ├── config.py               # Configuration management (shared by web + bot)
 ├── delegate-bot/           # Discord bot — runs on its own machine in speedcubemuse
-│   ├── bot.py              # Bot entrypoint (!wca commands + /delegate slash command)
+│   ├── bot.py              # Bot entrypoint (/query and /delegate slash commands)
 │   ├── delegate.py         # Embed building + thread conversation history helpers
 │   ├── Dockerfile          # Optional standalone bot image; unused by GitHub Actions
 │   ├── fly.toml            # Optional separate-app config; unused by GitHub Actions
@@ -384,6 +386,7 @@ DISCORD_GUILD_ID=your_guild_id
 
 # App Settings
 MAX_QUERY_RESULTS=50
+# Optional prefix for legacy text commands; slash commands always use /
 COMMAND_PREFIX=!wca
 ```
 
@@ -400,8 +403,9 @@ pip install -r delegate-bot/requirements.txt
 python delegate-bot/bot.py
 ```
 
-Set `DISCORD_GUILD_ID` in `.env` while developing — slash commands sync to that
-guild instantly instead of waiting for global propagation (~1 hour).
+The bot syncs its slash commands with Discord when it starts. Deploy or restart
+the bot after adding commands. Set `DISCORD_GUILD_ID` in `.env` while developing
+to sync commands to a specific test server; leave it unset for global commands.
 
 ### Update the database
 
@@ -456,6 +460,7 @@ Supabase SQL Editor; the other two modes work without it.
 python -m pytest tests/ -v                    # everything
 python -m pytest tests/test_database.py -v    # WCA data integrity
 python -m pytest tests/test_game_engine.py -v -s   # includes the self-play gate
+python -m unittest discover -s tests -p test_bot_commands.py -v  # offline Discord command checks
 ```
 
 The self-play tests play the engine against every candidate with a perfect oracle
