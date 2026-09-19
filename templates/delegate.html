@@ -70,7 +70,7 @@
     <script>
         const SUPABASE_URL = '{{ supabase_url }}';
         const SUPABASE_ANON_KEY = '{{ supabase_anon_key }}';
-        const MAX_GUEST_QUESTIONS = {{ max_guest_questions }};
+        const MAX_GUEST_QUESTIONS = Number('{{ max_guest_questions }}');
         const REGS_URL = 'https://www.worldcubeassociation.org/regulations';
 
         let sbClient = null;
