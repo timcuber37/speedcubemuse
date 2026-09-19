@@ -4,23 +4,22 @@
 {% block content %}
 <div class="game-header">
     <h1>Head to head</h1>
-    <p class="subtitle">Pick a competitor each, then take turns asking. First to name the other's wins.</p>
+    <p class="subtitle">You and a friend each pick a secret competitor. On your turn, ask a yes-or-no question or guess your friend's competitor.</p>
+    <p class="form-help">Each question or guess uses a turn. After a correct guess, the other player gets one final guess to tie the match.</p>
 </div>
 
 {% if not pvp_ready %}
 <div class="game-panel setup-notice">
-    <h2>Head-to-head isn't set up yet</h2>
+    <h2>Head to head is unavailable right now</h2>
     <p>
-        Matches are stored in Supabase, and the tables haven't been created on
-        this server. Run <code>supabase_game_setup.sql</code> once in the
-        Supabase SQL editor to enable this mode &mdash; the other two modes work
-        without it.
+        You can still try <a href="/game/akinator">I'll guess yours</a> or
+        <a href="/game/solo">You guess mine</a>.
     </p>
 </div>
 {% endif %}
 
 <div id="signin-gate" class="game-panel hidden">
-    <p>Head-to-head needs an account, so both players stay attached to the match.</p>
+    <p>Both players need to sign in to play head to head.</p>
     <a href="/login" class="game-btn game-btn-primary" style="display:block;text-align:center;text-decoration:none;margin-top:16px;">Sign in</a>
 </div>
 
@@ -38,14 +37,15 @@
     <div id="tab-create">
         <label class="game-label" for="difficulty">Difficulty</label>
         <select id="difficulty" class="game-select">
-            <option value="easy">Easy &mdash; 300 best-known competitors</option>
+            <option value="easy">Easy &mdash; 300 competitors</option>
             <option value="normal" selected>Normal &mdash; 1,000 competitors</option>
-            <option value="hard">Hard &mdash; every record holder and world top 100</option>
-            <option value="everyone">Everyone &mdash; any competitor with 5+ competitions</option>
+            <option value="hard">Hard &mdash; records and top 100</option>
+            <option value="everyone">Everyone &mdash; widest selection</option>
         </select>
+        <p class="form-help"><a href="/game">See who each difficulty includes</a>.</p>
     </div>
 
-    <label class="game-label" for="cuber-input">Your competitor &mdash; keep it to yourself</label>
+    <label class="game-label" for="cuber-input">Your secret competitor</label>
     <div class="guess-bar">
         <input type="text" id="cuber-input" placeholder="Search by name…" autocomplete="off">
         <div id="suggestions" class="suggestions hidden"></div>
@@ -58,16 +58,16 @@
 
 <div id="waiting" class="game-panel hidden">
     <h2 class="pvp-waiting-title">Waiting for an opponent</h2>
-    <p class="guess-lead">Share this code:</p>
+    <p class="guess-lead">Share this code with your friend. They can enter it under "Join with a code" on the Head to head page.</p>
     <div id="code-display" class="pvp-code-display"></div>
-    <p class="guess-meta">This page updates itself when they join.</p>
+    <p class="guess-meta">Keep this page open. The match starts when your friend joins.</p>
 </div>
 
 <div id="match" class="game-panel hidden">
     <div id="turn-banner" class="turn-banner">
         <span class="turn-dot" aria-hidden="true"></span>
         <span id="turn-text"></span>
-        <button id="resign-btn" class="game-btn-link">Resign</button>
+        <button id="resign-btn" class="game-btn-link">Give up</button>
     </div>
 
     <p id="your-cuber" class="pvp-chosen"></p>
@@ -81,7 +81,7 @@
             <ol id="feed-you" class="feed-col"></ol>
         </section>
         <section class="feed-track">
-            <h3 class="feed-head feed-head-them">They asked</h3>
+            <h3 class="feed-head feed-head-them">Your opponent asked</h3>
             <ol id="feed-them" class="feed-col"></ol>
         </section>
     </div>
@@ -89,15 +89,17 @@
 
     <form id="ask-form" class="ask-form">
         <div class="ask-bar">
-            <input type="text" id="question" placeholder="Ask about their cuber…" autocomplete="off" required>
+            <input type="text" id="question" aria-label="Your yes-or-no question about their competitor" placeholder="Have they ever set a world record?" autocomplete="off" required>
             <button type="submit" id="pvp-ask-btn">Ask</button>
         </div>
     </form>
+    <p class="form-help">Ask about their country, records, or competition history.</p>
 
     <div class="guess-bar">
-        <input type="text" id="guess-input" placeholder="Name their cuber…" autocomplete="off">
+        <input type="text" id="guess-input" aria-label="Guess your opponent's competitor" aria-describedby="guess-help" placeholder="Type their competitor's name…" autocomplete="off">
         <div id="guess-suggestions" class="suggestions hidden"></div>
     </div>
+    <p id="guess-help" class="form-help">Select a name from the suggestions to submit your guess.</p>
     <p id="turn-lock" class="turn-lock hidden">Waiting for your opponent to move.</p>
 </div>
 
@@ -130,7 +132,7 @@
             body: body === undefined ? undefined : JSON.stringify(body),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok && !data.error) data.error = 'Something went wrong.';
+        if (!res.ok && !data.error) data.error = 'We couldn\'t update the match. Please try again.';
         return data;
     }
 
@@ -272,9 +274,9 @@
 
         $('turn-text').textContent =
             rebuttal && mine  ? 'Last chance — name their cuber to tie it'
-          : rebuttal          ? 'They guessed yours. One chance to tie…'
+          : rebuttal          ? 'You guessed correctly. Your opponent has one guess to tie.'
           : mine              ? 'Your turn — ask a question or name their cuber'
-          :                     'Their turn';
+          :                     "Your opponent's turn";
 
         $('turn-banner').className = 'turn-banner ' + (
             rebuttal && mine ? 'is-rebuttal'
@@ -286,14 +288,14 @@
         $('match').classList.toggle('rebuttal-only', rebuttal);
         $('turn-lock').classList.toggle('hidden', mine);
         $('turn-lock').textContent = rebuttal
-            ? 'Waiting on their last guess.'
+            ? 'Waiting for your opponent\'s final guess.'
             : 'Waiting for your opponent to move.';
 
         $('question').disabled = !mine || rebuttal;
         $('pvp-ask-btn').disabled = !mine || rebuttal;
         $('guess-input').disabled = !mine;
         $('guess-input').placeholder = rebuttal && mine
-            ? 'Name their cuber — one guess…' : 'Name their cuber…';
+            ? 'Your final guess: type a name…' : 'Type their competitor\'s name…';
 
         renderFeed(s.moves);
     }
@@ -308,7 +310,7 @@
         if (m.kind === 'guess') {
             return `<li class="move move-${m.payload.correct ? 'win' : 'miss'}">
                 <span class="move-q">Guessed ${esc(m.payload.name)}</span>
-                <span class="move-a">${m.payload.correct ? 'Correct' : 'Wrong'}</span></li>`;
+                <span class="move-a">${m.payload.correct ? 'Correct' : 'Incorrect'}</span></li>`;
         }
         if (m.kind === 'rebuttal') {
             return `<li class="move move-win">
@@ -316,11 +318,11 @@
         }
         if (m.kind === 'tie') {
             return `<li class="move move-tie">
-                <span class="move-q">Levelled it with ${esc(m.payload.name)}</span>
+                <span class="move-q">Tied the match by guessing ${esc(m.payload.name)}</span>
                 <span class="move-a">Tie</span></li>`;
         }
         if (m.kind === 'resign') {
-            return `<li class="move move-note"><span class="move-q">Resigned</span></li>`;
+            return `<li class="move move-note"><span class="move-q">Gave up</span></li>`;
         }
         return '';   // 'joined' and 'win' are structural, not cards
     }
@@ -402,7 +404,7 @@
     });
 
     $('resign-btn').addEventListener('click', async () => {
-        if (!confirm('Resign this match?')) return;
+        if (!confirm('Give up this match? Your opponent will win.')) return;
         await api(`/api/game/pvp/${matchId}/resign`, {});
         refresh();
     });

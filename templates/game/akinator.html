@@ -4,18 +4,19 @@
 {% block content %}
 <div class="game-header">
     <h1>I'll guess yours</h1>
-    <p class="subtitle">Think of a competitor, then answer honestly. Not sure? Say so &mdash; it's allowed.</p>
+    <p class="subtitle">Think of a competitor from your chosen difficulty. Answer the app's questions, and choose "Don't know" whenever you're unsure.</p>
 </div>
 
 <div id="setup" class="game-panel">
     <label class="game-label" for="difficulty">Difficulty</label>
     <select id="difficulty" class="game-select">
-        <option value="easy">Easy &mdash; 300 best-known competitors</option>
+        <option value="easy">Easy &mdash; 300 competitors</option>
         <option value="normal" selected>Normal &mdash; 1,000 competitors</option>
-        <option value="hard">Hard &mdash; every record holder and world top 100</option>
-        <option value="everyone">Everyone &mdash; any competitor with 5+ competitions</option>
+        <option value="hard">Hard &mdash; records and top 100</option>
+        <option value="everyone">Everyone &mdash; widest selection</option>
     </select>
-    <button id="start-btn" class="game-btn game-btn-primary">Start</button>
+    <p class="form-help"><a href="/game">See who each difficulty includes</a>.</p>
+    <button id="start-btn" class="game-btn game-btn-primary">Start game</button>
 </div>
 
 <div id="play" class="game-panel hidden">
@@ -90,7 +91,7 @@
         // far longer game than you're actually going to play. The candidate
         // count is the number that genuinely tracks progress.
         const left = data.remaining === 1
-            ? '1 possible' : `${data.remaining.toLocaleString()} possible`;
+            ? '1 possible competitor' : `${data.remaining.toLocaleString()} possible competitors`;
         $('progress-text').textContent = `Question ${data.asked + 1} · ${left}`;
         $('question-box').innerHTML = `<h2>${esc(data.question.text)}</h2>`;
 
@@ -129,7 +130,7 @@
 
         if (!data.guess) {
             $('result').innerHTML = `
-                <p class="game-error">${esc(data.error || 'I ran out of candidates.')}</p>
+                <p class="game-error">${esc(data.error || 'I couldn\'t find a competitor that fits your answers.')}</p>
                 <button class="game-btn game-btn-primary" onclick="location.reload()">Try again</button>`;
             return;
         }
@@ -152,7 +153,7 @@
                 <a href="${esc(g.wca_url)}" target="_blank" rel="noopener" class="guess-link">WCA profile &rarr;</a>
                 <div class="guess-actions">
                     <button id="right-btn" class="game-btn game-btn-primary">That's them</button>
-                    <button id="wrong-btn" class="game-btn">Not quite</button>
+                    <button id="wrong-btn" class="game-btn">Try someone else</button>
                 </div>
             </div>`;
         mountAvatar($('guess-avatar'), g.wca_id, g.name);
@@ -186,14 +187,14 @@
         $('result').innerHTML = `
             <div class="guess-card">
                 <p class="guess-lead">
-                    After ${esc(data.asked)} questions I can't separate these.
-                    Is it one of them?
+                    These competitors fit your answers best after ${esc(data.asked)} questions.
+                    Is yours on this list?
                 </p>
                 <div class="shortlist">
                     ${options.map(o => `
                         <button class="shortlist-option" data-id="${esc(o.wca_id)}">
                             <span class="shortlist-name">${esc(o.name)}</span>
-                            <span class="shortlist-meta">${esc(o.country)} · ${Math.round((o.confidence || 0) * 100)}%</span>
+                            <span class="shortlist-meta">${esc(o.country)} · ${Math.round((o.confidence || 0) * 100)}% confident</span>
                         </button>`).join('')}
                 </div>
                 <button id="none-btn" class="game-btn">None of these</button>

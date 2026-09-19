@@ -349,7 +349,7 @@ Generate a corrected SQL query that answers the question.""",
             response = await self._create_message(
                 self._resolve_model(model),
                 max_tokens=150,
-                system="You are a helpful assistant summarizing WCA competition database query results. Write 1-2 sentences directly answering the user's question based on the data. Be concise and specific — include key names, numbers, or times from the results. Do not mention SQL.",
+                system="You are a helpful assistant summarizing WCA competition database query results. Write 1-2 sentences directly answering the user's question based on the data. Be concise and specific — include key names, numbers, or times from the results. Use everyday language and briefly explain unfamiliar abbreviations. Do not mention SQL.",
                 messages=[{
                     "role": "user",
                     "content": f"Question: {question}\n\nResults:\n{rows_text}"

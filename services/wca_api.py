@@ -326,24 +326,36 @@ class WCAService:
             HTML table string
         """
         if not results:
-            return "<p>No results found.</p>"
+            return "<p>No matching results. Check the name, event, or year in your question and try again.</p>"
 
         if len(results) == 1 and 'error' in results[0]:
-            from html import escape
-            return f"<p class='error'>Error: {escape(str(results[0].get('message', 'Unknown error')))}</p>"
+            return "<p class='error'>We couldn't look up these results. Please try again or reword your question.</p>"
 
         display_results = results[:max_results]
 
         if len(display_results) == 0:
-            return "<p>No results found.</p>"
+            return "<p>No matching results. Check the name, event, or year in your question and try again.</p>"
 
         from html import escape
         columns = list(display_results[0].keys())
 
+        column_labels = {
+            'person_name': 'Competitor', 'personName': 'Competitor',
+            'competitorName': 'Competitor', 'person_id': 'WCA ID',
+            'wca_id': 'WCA ID', 'country_id': 'Country',
+            'event_id': 'Event', 'competition_id': 'Competition',
+            'round_type_id': 'Round', 'pos': 'Place', 'best': 'Best result',
+            'average': 'Average', 'value': 'Result',
+            'world_rank': 'World rank', 'continent_rank': 'Continental rank',
+            'country_rank': 'National rank', 'result_count': 'Results',
+            'wr_count': 'World records', 'attempt_number': 'Attempt',
+        }
         html = '<table><thead><tr>'
         for col in columns:
             align = 'left' if self._is_name_column(col) else 'right'
-            html += f'<th style="text-align:{align}">{escape(str(col))}</th>'
+            label = column_labels.get(col, str(col).replace('_', ' '))
+            label = label[:1].upper() + label[1:]
+            html += f'<th style="text-align:{align}">{escape(label)}</th>'
         html += '</tr></thead><tbody>'
 
         for row in display_results:

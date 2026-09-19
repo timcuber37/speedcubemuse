@@ -23,7 +23,7 @@
                 <a href="/delegate" class="nav-link">Ask a Delegate</a>
                 <a href="/game" class="nav-link active">Guess the Cuber</a>
                 <a href="/about" class="nav-link">About</a>
-                <button class="auth-btn" id="auth-btn" onclick="handleAuth()">Sign In</button>
+                <button class="auth-btn" id="auth-btn" onclick="handleAuth()">Sign in</button>
             </div>
         </div>
     </nav>
@@ -31,6 +31,10 @@
     <div class="container game-container">
         {% block content %}{% endblock %}
     </div>
+
+    <footer class="footer">
+        <p>Games use the <a href="/about">WCA results available here</a>. Recent records and rankings may not be included yet.</p>
+    </footer>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script>
@@ -60,7 +64,7 @@
                 btn.textContent = currentUser.user_metadata?.full_name || currentUser.email || 'Profile';
                 btn.onclick = () => { window.location.href = '/profile'; };
             } else {
-                btn.textContent = 'Sign In';
+                btn.textContent = 'Sign in';
                 btn.onclick = handleAuth;
             }
         }

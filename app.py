@@ -148,11 +148,11 @@ def delegate():
 def query():
     data = request.get_json()
     if not data or not isinstance(data, dict):
-        return jsonify({'error': 'Invalid request.'}), 400
+        return jsonify({'error': 'We couldn\'t read your question. Please try again.'}), 400
 
     question = data.get('question', '')
     if not isinstance(question, str):
-        return jsonify({'error': 'Invalid question format.'}), 400
+        return jsonify({'error': 'Please type your question as text.'}), 400
 
     question = question.strip()
 
@@ -160,18 +160,18 @@ def query():
         return jsonify({'error': 'Please enter a question.'}), 400
 
     if len(question) > MAX_QUESTION_LENGTH:
-        return jsonify({'error': f'Question too long (max {MAX_QUESTION_LENGTH} characters).'}), 400
+        return jsonify({'error': f'Please shorten your question to {MAX_QUESTION_LENGTH} characters or fewer.'}), 400
 
     model = data.get('model')
     if model is not None and not isinstance(model, str):
-        return jsonify({'error': 'Invalid model format.'}), 400
+        return jsonify({'error': 'Please choose an answer mode and try again.'}), 400
 
     # Opus and Sonnet are restricted to signed-in users; guests get Haiku only.
     effective_model = model if model in QUERY_MODELS else DEFAULT_QUERY_MODEL
     if effective_model not in GUEST_QUERY_MODELS:
         user, _ = get_current_user()
         if user is None:
-            return jsonify({'error': 'Sign in to use Opus or Sonnet. Guests can use Haiku.'}), 403
+            return jsonify({'error': 'Sign in to use Balanced or Complex questions mode, or choose Quick to continue as a guest.'}), 403
 
     try:
         # Translates, executes, and retries once with the DB error on failure.
@@ -180,7 +180,7 @@ def query():
         )
 
         if not sql_query:
-            return jsonify({'error': 'Could not translate your question to a safe SQL query.'}), 400
+            return jsonify({'error': 'We couldn\'t find a way to answer that question. Try naming the event, competitor, or competition you mean.'}), 400
 
         logger.info(f"Generated SQL: {sql_query}")
 
@@ -196,7 +196,7 @@ def query():
 
     except Exception as e:
         logger.error(f"Query error: {e}", exc_info=True)
-        return jsonify({'error': 'Unable to process your query. Please try again.'}), 500
+        return jsonify({'error': 'We couldn\'t look up your answer right now. Please try again.'}), 500
 
 
 def _is_delegate_authenticated() -> bool:
@@ -210,21 +210,21 @@ def _is_delegate_authenticated() -> bool:
 @limiter.limit("10 per day", exempt_when=_is_delegate_authenticated)
 def delegate_ask():
     if not delegate_service.is_ready():
-        return jsonify({'error': 'Ask a Delegate is not configured on this server.'}), 503
+        return jsonify({'error': 'Ask a Delegate is unavailable right now. Please try again later.'}), 503
 
     data = request.get_json()
     if not data or not isinstance(data, dict):
-        return jsonify({'error': 'Invalid request.'}), 400
+        return jsonify({'error': 'We couldn\'t read your question. Please try again.'}), 400
 
     question = (data.get('question') or '').strip()
     if not question:
         return jsonify({'error': 'Please enter a question.'}), 400
     if len(question) > MAX_QUESTION_LENGTH:
-        return jsonify({'error': f'Question too long (max {MAX_QUESTION_LENGTH} characters).'}), 400
+        return jsonify({'error': f'Please shorten your question to {MAX_QUESTION_LENGTH} characters or fewer.'}), 400
 
     history = data.get('history') or []
     if not isinstance(history, list):
-        return jsonify({'error': 'Invalid history format.'}), 400
+        return jsonify({'error': 'We couldn\'t read this conversation. Clear it and ask your question again.'}), 400
 
     # Sanitize history: only accept user/assistant roles, cap per-message length,
     # and reject any history where a client claims an assistant role with suspicious content.
@@ -240,7 +240,7 @@ def delegate_ask():
     # Reject oversized history payloads to prevent token-stuffing.
     total_history_chars = sum(len(m['content']) for m in sanitized)
     if total_history_chars > MAX_DELEGATE_HISTORY_CHARS:
-        return jsonify({'error': 'Conversation history too long. Please clear and start a new conversation.'}), 400
+        return jsonify({'error': 'This conversation is too long to continue. Select Clear conversation to start again.'}), 400
 
     try:
         result = delegate_service.answer(sanitized, question)
@@ -258,7 +258,7 @@ def delegate_ask():
 def save_query():
     user, token = get_current_user()
     if not user:
-        return jsonify({'error': 'Not authenticated'}), 401
+        return jsonify({'error': 'Please sign in to access your saved questions.'}), 401
 
     data = request.get_json()
     question = data.get('question', '')
@@ -266,12 +266,12 @@ def save_query():
     results = data.get('results', [])
 
     if not question or not sql_query:
-        return jsonify({'error': 'Missing question or SQL'}), 400
+        return jsonify({'error': 'There is no question ready to save. Ask a question on the home page first.'}), 400
 
     saved = saved_queries.save_query(token, user.id, question, sql_query, results)
     if saved:
         return jsonify({'success': True, 'id': saved['id']})
-    return jsonify({'error': 'Failed to save query'}), 500
+    return jsonify({'error': 'We couldn\'t save your question. Please try again.'}), 500
 
 
 @app.route('/api/saved-queries', methods=['GET'])
@@ -279,7 +279,7 @@ def save_query():
 def get_saved():
     user, token = get_current_user()
     if not user:
-        return jsonify({'error': 'Not authenticated'}), 401
+        return jsonify({'error': 'Please sign in to access your saved questions.'}), 401
 
     queries = saved_queries.get_saved_queries(token, user.id)
     return jsonify({'queries': queries})
@@ -290,12 +290,12 @@ def get_saved():
 def delete_query(query_id):
     user, token = get_current_user()
     if not user:
-        return jsonify({'error': 'Not authenticated'}), 401
+        return jsonify({'error': 'Please sign in to access your saved questions.'}), 401
 
     success = saved_queries.delete_saved_query(token, user.id, query_id)
     if success:
         return jsonify({'success': True})
-    return jsonify({'error': 'Failed to delete query'}), 500
+    return jsonify({'error': 'We couldn\'t delete your saved question. Please try again.'}), 500
 
 
 # --- WCA OAuth ---

@@ -32,7 +32,7 @@
         <!-- Account Info Card -->
         <div class="profile-card" id="profile-card">
             <div class="profile-info">
-                <img class="profile-avatar" id="profile-avatar" src="" alt="Avatar">
+                <img class="profile-avatar" id="profile-avatar" src="" alt="Your profile photo">
                 <div class="profile-details">
                     <div class="profile-name-row">
                         <h1 class="profile-name" id="profile-name">Loading...</h1>
@@ -46,19 +46,20 @@
                     </div>
                 </div>
             </div>
-            <button class="signout-btn" onclick="signOut()">Sign Out</button>
+            <button class="signout-btn" onclick="signOut()">Sign out</button>
         </div>
 
         <!-- Saved Queries Section -->
-        <h2 class="section-title">Saved Queries</h2>
+        <h2 class="section-title">Saved questions</h2>
+        <p class="form-help">Ask a saved question again to see results from the latest data available here.</p>
 
         <div id="saved-loading" class="hidden">
             <div class="loading-bar"></div>
-            <span>Loading saved queries...</span>
+            <span>Loading saved questions...</span>
         </div>
 
         <div id="saved-empty" class="hidden">
-            <p>No saved queries yet. Run a query on the <a href="/">home page</a> and click Save to keep it here.</p>
+            <p>No saved questions yet. Ask a question on the <a href="/">home page</a>, then select <strong>Save question</strong> to keep it here.</p>
         </div>
 
         <div id="saved-list"></div>
@@ -146,12 +147,12 @@
 
                 if (!data.queries || data.queries.length === 0) {
                     savedEmpty.classList.remove('hidden');
-                    document.getElementById('profile-query-count').textContent = '0 saved queries';
+                    document.getElementById('profile-query-count').textContent = '0 saved questions';
                     return;
                 }
 
                 savedEmpty.classList.add('hidden');
-                document.getElementById('profile-query-count').textContent = `${data.queries.length} saved quer${data.queries.length !== 1 ? 'ies' : 'y'}`;
+                document.getElementById('profile-query-count').textContent = `${data.queries.length} saved question${data.queries.length !== 1 ? 's' : ''}`;
 
                 data.queries.forEach(q => {
                     const date = new Date(q.created_at).toLocaleDateString('en-US', {
@@ -166,19 +167,22 @@
                         <div class="saved-card-header">
                             <div>
                                 <div class="saved-question">${escapeHtml(q.question)}</div>
-                                <div class="saved-meta">${date} &middot; ${q.result_count} result${q.result_count !== 1 ? 's' : ''}</div>
+                                <div class="saved-meta">Saved ${date}</div>
                             </div>
                             <div class="saved-actions">
-                                <button class="saved-action-btn" onclick="rerunQuery('${escapeHtml(q.question)}')" title="Re-run">
+                                <button class="saved-action-btn" onclick="rerunQuery('${escapeHtml(q.question)}')" title="Ask again" aria-label="Ask this question again">
                                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
+                                    Ask again
                                 </button>
-                                <button class="saved-action-btn delete" onclick="deleteQuery('${q.id}', this)" title="Delete">
+                                <button class="saved-action-btn delete" onclick="deleteQuery('${q.id}', this)" title="Delete saved question" aria-label="Delete this saved question">
                                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                                    Delete
                                 </button>
                             </div>
                         </div>
                         <details class="saved-sql">
-                            <summary>SQL</summary>
+                            <summary>Search details (SQL)</summary>
+                            <p class="form-help">The database instructions used when you saved this question.</p>
                             <code>${escapeHtml(q.sql_query)}</code>
                         </details>
                         ${previewHtml ? `<div class="saved-preview">${previewHtml}</div>` : ''}
@@ -187,7 +191,7 @@
                 });
             } catch {
                 savedLoading.classList.add('hidden');
-                savedList.innerHTML = '<p class="error">Failed to load saved queries.</p>';
+                savedList.innerHTML = '<p class="error">We couldn\'t load your saved questions. Refresh the page to try again.</p>';
             }
         }
 
@@ -217,7 +221,7 @@
         }
 
         async function deleteQuery(id, btn) {
-            if (!confirm('Delete this saved query?')) return;
+            if (!confirm('Delete this saved question from your profile?')) return;
             const token = await getAccessToken();
             try {
                 const response = await fetch(`/api/saved-query/${id}`, {
@@ -228,13 +232,13 @@
                     btn.closest('.saved-card').remove();
                     const savedList = document.getElementById('saved-list');
                     const count = savedList.children.length;
-                    document.getElementById('profile-query-count').textContent = `${count} saved quer${count !== 1 ? 'ies' : 'y'}`;
+                    document.getElementById('profile-query-count').textContent = `${count} saved question${count !== 1 ? 's' : ''}`;
                     if (!count) {
                         document.getElementById('saved-empty').classList.remove('hidden');
                     }
                 }
             } catch {
-                alert('Failed to delete query.');
+                alert('We couldn\'t delete this saved question. Please try again.');
             }
         }
     </script>

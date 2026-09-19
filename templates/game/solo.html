@@ -5,20 +5,21 @@
 <div class="game-header">
     <h1>You guess mine</h1>
     <p class="subtitle">
-        I've picked a competitor. Ask anything in plain English &mdash; "are they European?",
-        "do they have a world record?" &mdash; then name them when you're ready.
+        The app picks a secret competitor when you start. Ask yes-or-no questions
+        about their country, records, or competition history, then guess their name.
     </p>
 </div>
 
 <div id="setup" class="game-panel">
     <label class="game-label" for="difficulty">Difficulty</label>
     <select id="difficulty" class="game-select">
-        <option value="easy">Easy &mdash; 300 best-known competitors</option>
+        <option value="easy">Easy &mdash; 300 competitors</option>
         <option value="normal" selected>Normal &mdash; 1,000 competitors</option>
-        <option value="hard">Hard &mdash; every record holder and world top 100</option>
-        <option value="everyone">Everyone &mdash; literally any WCA competitor</option>
+        <option value="hard">Hard &mdash; records and top 100</option>
+        <option value="everyone">Everyone &mdash; all competitors</option>
     </select>
-    <button id="start-btn" class="game-btn game-btn-primary">Start</button>
+    <p class="form-help"><a href="/game">See who each difficulty includes</a>.</p>
+    <button id="start-btn" class="game-btn game-btn-primary">Start game</button>
 </div>
 
 <div id="play" class="game-panel hidden">
@@ -29,16 +30,18 @@
 
     <form id="ask-form" class="ask-form">
         <div class="ask-bar">
-            <input type="text" id="question" placeholder="Ask a yes/no question…" autocomplete="off" required>
+            <input type="text" id="question" aria-label="Your yes-or-no question" placeholder="Have they ever set a world record?" autocomplete="off" required>
             <button type="submit" id="game-ask-btn">Ask</button>
         </div>
     </form>
+    <p class="form-help">Ask about WCA results. The game doesn't have details such as hobbies or appearance.</p>
 
     <div class="guess-bar">
-        <input type="text" id="guess-input" placeholder="Know who it is? Type a name…" autocomplete="off">
+        <input type="text" id="guess-input" aria-label="Guess the competitor" aria-describedby="guess-help" placeholder="Type a name to make a guess…" autocomplete="off">
         <div id="suggestions" class="suggestions hidden"></div>
     </div>
-    <button id="giveup-btn" class="game-btn-link">Give up and reveal</button>
+    <p id="guess-help" class="form-help">Select a name from the suggestions to submit your guess. A wrong guess lets you keep playing.</p>
+    <button id="giveup-btn" class="game-btn-link">Reveal answer and end game</button>
 </div>
 
 <div id="result" class="game-panel hidden"></div>
@@ -91,7 +94,7 @@
         // wording — a negated match ("are they retired?") answers the opposite
         // attribute, and seeing just the yes/no would look wrong.
         const note = interpreted
-            ? `<span class="qa-interp">read as: ${esc(interpreted)}</span>` : '';
+            ? `<span class="qa-interp">This asks the opposite of: ${esc(interpreted)}</span>` : '';
         li.innerHTML = `<span class="qa-q">${esc(question)}${note}</span>` +
                        `<span class="qa-a">${esc(answer)}</span>`;
         $('qa-log').appendChild(li);

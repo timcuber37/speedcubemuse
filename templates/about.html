@@ -23,7 +23,7 @@
                         <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
                     </svg>
                 </a>
-                <button class="auth-btn" id="auth-btn" onclick="handleAuth()">Sign In</button>
+                <button class="auth-btn" id="auth-btn" onclick="handleAuth()">Sign in</button>
             </div>
         </div>
     </nav>
@@ -35,39 +35,39 @@
         <div class="about-content">
             <section class="about-section">
                 <h2>What is SpeedCubeMuse?</h2>
-                <p>SpeedCubeMuse is an AI-powered tool that lets you query World Cube Association competition data using plain English. Instead of writing SQL, just ask a question and get instant results.</p>
+                <p>SpeedCubeMuse helps you explore World Cube Association (WCA) competition results, understand competition rules, and play guessing games about cubers. Ask questions in your own words.</p>
             </section>
 
             <section class="about-section">
-                <h2>How It Works</h2>
+                <h2>Find cubing results</h2>
                 <div class="steps">
                     <div class="step">
                         <span class="step-num">1</span>
                         <div>
-                            <h3>Ask a Question</h3>
-                            <p>Type any question about WCA data in natural language.</p>
+                            <h3>Ask a question</h3>
+                            <p>On the <a href="/">home page</a>, ask about competitors, records, rankings, or competitions.</p>
                         </div>
                     </div>
                     <div class="step">
                         <span class="step-num">2</span>
                         <div>
-                            <h3>AI Translation</h3>
-                            <p>Anthropic's Claude AI translates your question into a SQL query against the WCA database.</p>
+                            <h3>We look it up</h3>
+                            <p>AI helps turn your question into a search of WCA results.</p>
                         </div>
                     </div>
                     <div class="step">
                         <span class="step-num">3</span>
                         <div>
-                            <h3>Get Results</h3>
-                            <p>The query runs against the WCA database and results are displayed in a formatted table.</p>
+                            <h3>Read the answer</h3>
+                            <p>See a short answer and a table of results. Sign in to save a question and ask it again later.</p>
                         </div>
                     </div>
                 </div>
             </section>
 
             <section class="about-section">
-                <h2>Database</h2>
-                <p>The app queries a database populated from the official <a href="https://www.worldcubeassociation.org/export/results" target="_blank" rel="noopener">WCA data export</a> ({{ db_meta.export_date_display }}), containing:</p>
+                <h2>Where the results come from</h2>
+                <p>We use the official <a href="https://www.worldcubeassociation.org/export/results" target="_blank" rel="noopener">WCA competition results</a>, published on {{ db_meta.export_date_display }}. Newer results may not be included yet.</p>
                 <div class="stats-grid">
                     {% for label, count in db_meta.stats %}
                     <div class="stat-card">
@@ -79,147 +79,92 @@
             </section>
 
             <section class="about-section">
-                <h2>Example Questions</h2>
+                <h2>Questions to try</h2>
                 <ul class="example-list">
-                    <li>What is the world record for 3x3?</li>
-                    <li>Who are the top 10 fastest 2x2 solvers?</li>
-                    <li>How many competitions have been held in the United States in 2025?</li>
-                    <li>Who has the most world record single results?</li>
-                    <li>Who is the top 3x3 competitor with the first name "Timothy"?</li>
-										<li>Who placed first in 3x3 finals at the 2023 World Championship?</li>
+                    <li>What is the world record single for 3x3?</li>
+                    <li>Who are the top 10 2x2 solvers by average?</li>
+                    <li>How many competitions were held in the United States in 2025?</li>
+                    <li>Who has set the most 3x3 single world records?</li>
+                    <li>Who won the 3x3 final at the 2023 World Championship?</li>
                 </ul>
             </section>
 
             <section class="about-section">
-                <h2>Tips for Better Results</h2>
+                <h2>Tips for asking questions</h2>
                 <ul class="tips-list">
                     <li>
-											<strong>Be Specific</strong>
-											<p>Make sure to be as precise as possible when formulating your question so the AI knows exactly what you're looking for, i.e., specify between single and average results.</p>
+                        <strong>Name the event and result type</strong>
+                        <p>For example, ask for the fastest 3x3 single or average. A single is one solve; an average combines several attempts in a round.</p>
                     </li>
-										<li>
-											<strong>Use Clear Language</strong>
-											<p>Avoid ambiguous terms and use clear, unambiguous language when asking your question, i.e., use "United States" instead of "America". </p>
-										</li>
-										<li>
-											<strong>Understand how WCA Results are Structured</strong>
-											<p>Having a basic understanding of WCA results and competition data can help you ask more effective questions and interpret the results.</p>
-										</li>
-										<li>
-											<strong>Experiment with Different Phrasings</strong>
-											<p>Try rephrasing your question in different ways to see if you get more accurate or detailed results.. i.e, ask "Who placed first in 3x3 finals" instead of asking "who won the competition".</p>
-										</li>
+                    <li>
+                        <strong>Add a place or year when it matters</strong>
+                        <p>Use a country name such as "United States" and include a year if you want results from a particular period.</p>
+                    </li>
+                    <li>
+                        <strong>Say which event someone won</strong>
+                        <p>A competition has several events. Try "Who won the 3x3 final?" and include the competition name.</p>
+                    </li>
+                    <li>
+                        <strong>Try rewording your question</strong>
+                        <p>If the answer doesn't look right, add a missing detail or ask more simply.</p>
+                    </li>
                 </ul>
             </section>
 
             <section class="about-section">
-                <h2>Ask a Delegate</h2>
-                <p>Ask a Delegate is an AI-powered chatbot trained on the full <a href="https://www.worldcubeassociation.org/regulations/" target="_blank" rel="noopener">WCA Regulations and Guidelines</a>. You can ask it anything you'd normally ask a WCA Delegate at a competition — rules clarifications, procedural questions, penalty interpretations, and more.</p>
-
-                <h3 class="about-subsection-title">How It Works</h3>
-                <div class="steps">
-                    <div class="step">
-                        <span class="step-num">1</span>
-                        <div>
-                            <h3>Ask Your Question</h3>
-                            <p>Type any question about WCA rules, procedures, or competition logistics in plain English.</p>
-                        </div>
-                    </div>
-                    <div class="step">
-                        <span class="step-num">2</span>
-                        <div>
-                            <h3>Semantic Search</h3>
-                            <p>Your question is matched against all 697 WCA regulations and guidelines using vector similarity search (Voyage AI embeddings + pgvector), then re-ranked to surface the most relevant passages.</p>
-                        </div>
-                    </div>
-                    <div class="step">
-                        <span class="step-num">3</span>
-                        <div>
-                            <h3>Grounded Answer</h3>
-                            <p>Claude generates a response grounded strictly in the retrieved regulations, with citations linked directly to the official WCA Regulations page.</p>
-                        </div>
-                    </div>
-                </div>
-
-                <h3 class="about-subsection-title">Example Questions</h3>
+                <h2>Ask about competition rules</h2>
+                <p><a href="/delegate">Ask a Delegate</a> is an AI assistant that looks up relevant parts of the <a href="https://www.worldcubeassociation.org/regulations/" target="_blank" rel="noopener">WCA Regulations and Guidelines</a> and explains them. Answers include links so you can read the rules yourself. You can ask follow-up questions in the same conversation.</p>
+                <p>For a decision at a competition, ask the WCA Delegate there.</p>
+                <h3 class="about-subsection-title">Questions to try</h3>
                 <ul class="example-list">
-                    <li>What happens if a competitor touches the puzzle after stopping the timer?</li>
-                    <li>Can a competitor use a different cube than the one assigned to them?</li>
-                    <li>What is the correct procedure for a +2 penalty?</li>
-                    <li>How many attempts does a competitor get for 3x3 blindfolded?</li>
-                    <li>What counts as a DNF in fewest moves?</li>
+                    <li>What happens if I touch the puzzle after stopping the timer?</li>
+                    <li>When is a two-second (+2) penalty given?</li>
+                    <li>Can I use earplugs during a solve?</li>
+                    <li>What does DNF (Did Not Finish) mean?</li>
                 </ul>
-
-                <h3 class="about-subsection-title">Guest Access</h3>
-                <p>Guests can ask up to 5 questions without signing in. Sign in with Google or your WCA account for unlimited access and conversation history.</p>
+                <p>Your conversation stays in this browser tab until you clear it or close the tab.</p>
             </section>
 
             <section class="about-section">
-                <h2>Discord Bot</h2>
-                <p>SpeedCubeMuse is also available as a Discord bot, bringing the same natural language query capabilities directly into your server!</p>
+                <h2>Guess the Cuber</h2>
+                <p>Test your cubing knowledge with <a href="/game">three guessing games</a>. Think of a competitor for the app to guess, ask questions to guess the app's competitor, or play against a friend. Choose a difficulty before you start.</p>
+                <p>Questions use WCA competition results, such as records, rankings, and competition history. Head to head requires both players to sign in.</p>
+            </section>
 
-                <h3 class="about-subsection-title">Commands</h3>
+            <section class="about-section">
+                <h2>Signing in</h2>
+                <p>You can try result searches and rules questions as a guest. Sign in with Google or your WCA account to continue after the guest limit, save result questions, and play head to head.</p>
+            </section>
+
+            <section class="about-section">
+                <h2>Use SpeedCubeMuse in Discord</h2>
+                <p>Add the bot to your server to ask about results and competition rules in Discord.</p>
                 <div class="command-list">
                     <div class="command">
+                        <code>/delegate &lt;question&gt;</code>
+                        <span>Ask about competition rules, then ask follow-up questions in the reply thread.</span>
+                    </div>
+                    <div class="command">
                         <code>!wca query &lt;question&gt;</code>
-                        <span>Ask a question about WCA data. Aliases: <code>!wca q</code>, <code>!wca ask</code></span>
+                        <span>Ask about competitors, records, and results. You can also use <code>!wca q</code> or <code>!wca ask</code>.</span>
                     </div>
                     <div class="command">
                         <code>!wca help</code>
-                        <span>Show available commands and example queries</span>
+                        <span>See commands and example questions.</span>
                     </div>
                     <div class="command">
                         <code>!wca ping</code>
-                        <span>Check bot latency</span>
+                        <span>Check whether the bot is responding.</span>
                     </div>
                 </div>
-
-                <h3 class="about-subsection-title">Add to Your Server</h3>
-                <div class="steps">
-                    <div class="step">
-                        <span class="step-num">1</span>
-                        <div>
-                            <h3>Click the Invite Link</h3>
-                            <p>Use <a href="https://discord.com/oauth2/authorize?client_id=1450571905043267594&permissions=309237730304&scope=bot%20applications.commands" target="_blank" rel="noopener">this link</a> to add SpeedCubeMuse to your Discord server.</p>
-                        </div>
-                    </div>
-                    <div class="step">
-                        <span class="step-num">2</span>
-                        <div>
-                            <h3>Select Your Server</h3>
-                            <p>Choose the server you want to add the bot to from the dropdown. You must have <strong>Manage Server</strong> permissions in that server.</p>
-                        </div>
-                    </div>
-                    <div class="step">
-                        <span class="step-num">3</span>
-                        <div>
-                            <h3>Authorize Permissions</h3>
-                            <p>Review and approve the requested permissions, then click <strong>Authorize</strong>. The bot only needs permission to send messages.</p>
-                        </div>
-                    </div>
-                    <div class="step">
-                        <span class="step-num">4</span>
-                        <div>
-                            <h3>Start Querying</h3>
-                            <p>Head to any text channel and type <code>!wca query</code> followed by your question. For example: <code>!wca q Who has the fastest 3x3 single?</code></p>
-                        </div>
-                    </div>
-                </div>
+                <h3 class="about-subsection-title">Add the bot to your server</h3>
+                <p>Open the <a href="https://discord.com/oauth2/authorize?client_id=1450571905043267594&amp;permissions=309237730304&amp;scope=bot%20applications.commands" target="_blank" rel="noopener">SpeedCubeMuse invite link</a>, choose your server, and review the requested permissions. You'll need permission to manage that server. Select <strong>Authorize</strong> to finish.</p>
+                <p>In a text channel the bot can access, try <code>!wca q Who has the fastest 3x3 single?</code> or use <code>/delegate</code> for a rules question.</p>
             </section>
 
             <section class="about-section">
-                <h2>Tech Stack</h2>
-                <div class="tech-tags">
-                    <span class="tag">Python</span>
-                    <span class="tag">Flask</span>
-                    <span class="tag">Discord.py</span>
-                    <span class="tag">Anthropic Claude</span>
-                    <span class="tag">Voyage AI</span>
-                    <span class="tag">TiDB Serverless</span>
-                    <span class="tag">Supabase</span>
-                    <span class="tag">Fly.io</span>
-                    <span class="tag">Docker</span>
-                </div>
+                <h2>Interested in the code?</h2>
+                <p>Visit <a href="https://github.com/timcuber37/wca_statbot" target="_blank" rel="noopener">SpeedCubeMuse on GitHub</a> for the source code and technical details.</p>
             </section>
         </div>
     </div>
@@ -257,7 +202,7 @@
                 authBtn.classList.add('signed-in');
             } else {
                 currentUser = null;
-                authBtn.textContent = 'Sign In';
+                authBtn.textContent = 'Sign in';
                 authBtn.classList.remove('signed-in');
             }
         }

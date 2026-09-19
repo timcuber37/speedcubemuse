@@ -23,7 +23,7 @@
                         <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
                     </svg>
                 </a>
-                <button class="auth-btn" id="auth-btn" onclick="handleAuth()">Sign In</button>
+                <button class="auth-btn" id="auth-btn" onclick="handleAuth()">Sign in</button>
             </div>
         </div>
     </nav>
@@ -31,9 +31,9 @@
     <div class="container delegate-container">
         <div class="delegate-header">
             <h1>Ask a Delegate</h1>
-            <p class="subtitle">Get answers about the WCA Regulations and Guidelines, grounded in the official text with citations.</p>
+            <p class="subtitle">Ask our AI assistant about World Cube Association (WCA) competition rules. Answers include links to the official rules.</p>
             <div class="delegate-disclaimer">
-                <strong>Informational only.</strong> Not a substitute for a real WCA Delegate's ruling at a competition.
+                For a decision at a competition, ask the WCA Delegate there.
             </div>
         </div>
 
@@ -43,7 +43,7 @@
                 <div class="starter-grid">
                     <button class="starter-btn" data-q="What is a +2 penalty and when is it given?">What is a +2 penalty and when is it given?</button>
                     <button class="starter-btn" data-q="What is the time limit rule for 3x3?">What is the time limit rule for 3x3?</button>
-                    <button class="starter-btn" data-q="How are DNFs handled in an Average of 5?">How are DNFs handled in an Average of 5?</button>
+                    <button class="starter-btn" data-q="What does DNF (Did Not Finish) mean?">What does DNF (Did Not Finish) mean?</button>
                     <button class="starter-btn" data-q="Can a competitor use earplugs during an attempt?">Can a competitor use earplugs during an attempt?</button>
                 </div>
             </div>
@@ -53,8 +53,8 @@
 
         <form id="ask-form" class="ask-form">
             <div class="ask-bar">
-                <input type="text" id="question" placeholder="Ask about the WCA Regulations…" autocomplete="off" required>
-                <button type="submit" id="ask-btn">
+                <input type="text" id="question" aria-label="Your question about competition rules" placeholder="Ask a rules question or follow-up…" autocomplete="off" required>
+                <button type="submit" id="ask-btn" aria-label="Ask question" title="Ask question">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <line x1="5" y1="12" x2="19" y2="12"></line>
                         <polyline points="12 5 19 12 12 19"></polyline>
@@ -62,6 +62,7 @@
                 </button>
             </div>
             <button type="button" id="reset-btn" class="reset-btn">Clear conversation</button>
+            <!-- <p class="form-help">This conversation stays in this browser tab until you clear it or close the tab.</p> -->
         </form>
     </div>
 
@@ -101,7 +102,7 @@
                 btn.textContent = name;
                 btn.onclick = () => { window.location.href = '/profile'; };
             } else {
-                btn.textContent = 'Sign In';
+                btn.textContent = 'Sign in';
                 btn.onclick = handleAuth;
             }
         }
@@ -128,9 +129,9 @@
             const remaining = Math.max(0, MAX_GUEST_QUESTIONS - used);
             meta.classList.remove('hidden');
             if (remaining > 0) {
-                meta.innerHTML = `Guest mode: <strong>${remaining}</strong> of ${MAX_GUEST_QUESTIONS} questions remaining. <a href="/login">Sign in</a> for unlimited.`;
+                meta.innerHTML = `You have <strong>${remaining}</strong> guest question${remaining === 1 ? '' : 's'} left. <a href="/login">Sign in</a> to continue after that.`;
             } else {
-                meta.innerHTML = `Guest limit reached. <a href="/login">Sign in</a> to continue.`;
+                meta.innerHTML = `You've used your guest questions. <a href="/login">Sign in</a> to keep asking.`;
             }
         }
 
@@ -180,7 +181,7 @@
                 const det = document.createElement('details');
                 det.className = 'sources';
                 const summary = document.createElement('summary');
-                summary.textContent = `Sources (${m.sources.length})`;
+                summary.textContent = `Read the rules used for this answer (${m.sources.length})`;
                 det.appendChild(summary);
                 for (const s of m.sources) {
                     const item = document.createElement('div');
@@ -216,7 +217,7 @@
         async function askQuestion(question) {
             if (isLoading) return;
             if (!currentUser && guestUsage() >= MAX_GUEST_QUESTIONS) {
-                alert('Guest limit reached. Please sign in to continue.');
+                alert('You\'ve used your guest questions. Sign in to keep asking.');
                 return;
             }
 
@@ -241,14 +242,14 @@
                 clearTyping();
                 const data = await resp.json();
                 if (!resp.ok) {
-                    messages.push({ role: 'assistant', content: data.error || 'Sorry, something went wrong.' });
+                    messages.push({ role: 'assistant', content: data.error || 'We couldn\'t answer right now. Please try again.' });
                 } else {
                     messages.push({ role: 'assistant', content: data.answer, sources: data.sources });
                     if (!currentUser) bumpGuestUsage();
                 }
             } catch (err) {
                 clearTyping();
-                messages.push({ role: 'assistant', content: 'Network error — please try again.' });
+                messages.push({ role: 'assistant', content: 'We couldn\'t connect. Check your internet connection and try again.' });
             } finally {
                 persist();
                 renderMessages();
@@ -268,7 +269,7 @@
         });
 
         document.getElementById('reset-btn').addEventListener('click', () => {
-            if (messages.length && !confirm('Clear the conversation?')) return;
+            if (messages.length && !confirm('Clear all questions and answers in this conversation?')) return;
             messages = [];
             persist();
             renderMessages();

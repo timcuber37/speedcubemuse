@@ -104,6 +104,9 @@ retired?" maps to is_active is false, not is_active is true.
 - If the question cannot be answered from these attributes, set attribute to null and give \
 a one-line error. Do this rather than forcing a poor match — a wrong mapping makes the game \
 unwinnable and the player cannot tell why.
+- The error is shown to the player. Use everyday language, explain what information is \
+missing, and suggest a yes/no question about country, records, or competition history. \
+Do not mention attributes, predicates, schemas, or model output.
 
 == ATTRIBUTES ==
 {vocabulary}
@@ -331,11 +334,11 @@ class QuestionParser:
         if not question or not question.strip():
             return None, 'Ask a question first.'
         if len(question) > MAX_QUESTION_LENGTH:
-            return None, f'Keep questions under {MAX_QUESTION_LENGTH} characters.'
+            return None, f'Please shorten your question to {MAX_QUESTION_LENGTH} characters or fewer.'
 
         normalized = _normalize(question)
         if not normalized:
-            return None, "That doesn't look like a question."
+            return None, 'Enter a yes-or-no question, such as "Have they ever set a world record?"'
 
         key = hashlib.sha256(normalized.encode('utf-8')).hexdigest()
 
@@ -354,17 +357,17 @@ class QuestionParser:
                         'schema — reparsing', normalized)
 
         if self.client is None:
-            return None, 'Free-text questions are unavailable right now.'
+            return None, 'We can\'t answer questions right now. Please try again later.'
 
         try:
             payload = self._ask_model(question)
         except Exception as e:
             logger.error('question parse failed: %s', e)
-            return None, 'Could not read that question. Try rephrasing it.'
+            return None, 'We couldn\'t process your question right now. Please try again.'
 
         pred = self._to_predicate(payload)
         if pred is None:
-            error = payload.get('error') or "I can't answer that kind of question."
+            error = payload.get('error') or 'Try a yes-or-no question about their country, records, or competition history.'
             self._cache_put(key, normalized, {'v': _SCHEMA_VERSION, 'error': error})
             return None, error
 

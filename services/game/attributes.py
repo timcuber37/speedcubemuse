@@ -270,14 +270,14 @@ _RECORDS = [
     Attribute(
         key='wr_single_count',
         kind='numeric',
-        question='Have they set at least {value} world record singles?',
+        question='Have they set a single-solve world record at least {value} times?',
         aliases=('world record singles', 'wr single count'),
         thresholds=(1, 2, 5),
     ),
     Attribute(
         key='wr_average_count',
         kind='numeric',
-        question='Have they set at least {value} world record averages?',
+        question='Have they set a world record average at least {value} times?',
         aliases=('world record averages', 'wr average count'),
         thresholds=(1, 2, 5),
     ),
@@ -405,7 +405,7 @@ _VOLUME = [
     Attribute(
         key='comp_count',
         kind='numeric',
-        question='Have they been to at least {value} competitions?',
+        question='Have they competed in at least {value} competitions?',
         aliases=('competitions', 'how many competitions', 'comp count'),
         thresholds=(20, 40, 75, 150),
     ),
@@ -433,19 +433,19 @@ _MILESTONES = [
     Attribute(
         key='sub10_333_single',
         kind='bool',
-        question='Do they have a sub-10 single in 3x3?',
+        question='Have they solved 3x3 in under 10 seconds at a WCA competition?',
         aliases=('sub 10 single', 'sub-10', 'under 10 seconds'),
     ),
     Attribute(
         key='sub10_333_average',
         kind='bool',
-        question='Do they have a sub-10 average in 3x3?',
+        question='Have they achieved a 3x3 average under 10 seconds at a WCA competition?',
         aliases=('sub 10 average', 'sub-10 average'),
     ),
     Attribute(
         key='sub6_333_single',
         kind='bool',
-        question='Do they have a sub-6 single in 3x3?',
+        question='Have they solved 3x3 in under 6 seconds at a WCA competition?',
         aliases=('sub 6', 'sub-6 single', 'under 6 seconds'),
         implies=('sub10_333_single',),
     ),
@@ -458,7 +458,7 @@ _MILESTONES = [
     Attribute(
         key='has_worlds_podium',
         kind='bool',
-        question='Have they podiumed at a World Championship?',
+        question='Have they finished in the top three in an event at a World Championship?',
         aliases=('worlds podium', 'world championship podium', 'world champion'),
         implies=('competed_at_worlds',),
     ),

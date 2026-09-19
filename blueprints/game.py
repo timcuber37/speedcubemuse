@@ -83,7 +83,7 @@ def _engine_or_error(difficulty):
         # The matrix is missing or the database is down. Say so plainly rather
         # than serving a game with no candidates.
         return None, (jsonify({
-            'error': 'The cuber database is unavailable right now. Try again shortly.'
+            'error': 'We couldn\'t load the competitors right now. Please try again shortly.'
         }), 503)
     return engine, None
 
@@ -166,7 +166,7 @@ def akinator_turn():
 
     raw_log = payload.get('answers') or []
     if len(raw_log) > MAX_LOG_ENTRIES:
-        return jsonify({'error': 'Too many answers in this game.'}), 400
+        return jsonify({'error': 'This game has reached its question limit. Please start a new game.'}), 400
     rejected = [str(x) for x in (payload.get('rejected') or [])][:MAX_REJECTED]
 
     answers = decode_log(raw_log)
@@ -197,7 +197,7 @@ def _guess_response(engine, belief, asked_count) -> dict:
     top = engine.top_candidates(belief, 6)
     if not top:
         return {'done': True, 'guess': None,
-                'error': 'I have run out of candidates. Start a new game?'}
+                'error': 'I couldn\'t find a competitor that fits your answers. Try a new game or a wider difficulty.'}
     best, confidence = top[0]
     return {
         'done': True,
@@ -229,7 +229,7 @@ def solo_start():
     secret = profiles.random_profile(difficulty)
     if secret is None:
         return jsonify({
-            'error': 'The cuber database is unavailable right now. Try again shortly.'
+            'error': 'We couldn\'t load the competitors right now. Please try again shortly.'
         }), 503
 
     logger.info('solo game started (%s): %s', difficulty, secret['wca_id'])
@@ -326,7 +326,7 @@ def _pvp_user():
     """PVP requires a signed-in user: matches are keyed on auth.users."""
     if not pvp.is_ready():
         return None, (jsonify({
-            'error': 'Head-to-head is not set up on this server yet.'
+            'error': 'Head to head is unavailable right now. Try one of the other game modes.'
         }), 503)
     user, _token = get_current_user()
     if user is None:
@@ -342,7 +342,7 @@ def _pvp(handler):
         return jsonify({'error': str(e)}), 400
     except Exception as e:
         logger.error('pvp call failed: %s', e)
-        return jsonify({'error': 'Something went wrong in that match.'}), 500
+        return jsonify({'error': 'We couldn\'t update the match. Please try again.'}), 500
 
 
 @game_bp.route('/api/game/pvp/create', methods=['POST'])
@@ -432,4 +432,4 @@ def question_text(pred_id):
     try:
         return jsonify({'text': predicate_from_id(pred_id).render()})
     except (ValueError, KeyError):
-        return jsonify({'error': 'unknown question'}), 404
+        return jsonify({'error': 'This question is no longer available. Please start a new game.'}), 404

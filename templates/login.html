@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sign In - SpeedCubeMuse</title>
+    <title>Sign in - SpeedCubeMuse</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-32.png') }}">
     <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon-16.png') }}">
@@ -16,6 +16,7 @@
             <div class="nav-links">
                 <a href="/" class="nav-link">Home</a>
                 <a href="/delegate" class="nav-link">Ask a Delegate</a>
+                <a href="/game" class="nav-link">Guess the Cuber</a>
                 <a href="/about" class="nav-link">About</a>
                 <a href="https://github.com/timcuber37/wca_statbot" target="_blank" rel="noopener" class="nav-link nav-link-external" aria-label="GitHub">
                     <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
@@ -29,7 +30,7 @@
     <div class="login-container">
         <div class="login-card">
             <h1 class="login-title">SpeedCubeMuse</h1>
-            <p class="login-subtitle">Sign in to save queries and track your results</p>
+            <p class="login-subtitle">Sign in to save questions, keep exploring results, and play against a friend.</p>
 
             <div class="login-providers">
                 <button class="provider-btn google" onclick="signInWithGoogle()">
@@ -90,15 +91,15 @@
         const errorParam = new URLSearchParams(window.location.search).get('error');
         if (errorParam) {
             const messages = {
-                wca_not_configured: 'WCA sign-in is not configured yet.',
-                invalid_state: 'Authentication request expired. Please try again.',
-                no_code: 'WCA did not return an authorization code.',
-                token_exchange_failed: 'Failed to exchange authorization code.',
-                no_access_token: 'WCA did not return an access token.',
-                user_info_failed: 'Failed to fetch your WCA profile.',
-                no_email: 'Your WCA account has no public email address.',
-                user_creation_failed: 'Failed to create your account. Please try again.',
-                login_link_failed: 'Failed to create your session. Please try again.',
+                wca_not_configured: 'WCA sign-in is unavailable right now. Try signing in with Google.',
+                invalid_state: 'Your sign-in attempt expired. Please sign in again.',
+                no_code: 'WCA sign-in did not finish. Please try again.',
+                token_exchange_failed: 'We couldn\'t complete WCA sign-in. Please try again.',
+                no_access_token: 'We couldn\'t complete WCA sign-in. Please try again.',
+                user_info_failed: 'We couldn\'t load your WCA profile. Please try again.',
+                no_email: 'We couldn\'t get an email address from your WCA account. Try signing in with Google.',
+                user_creation_failed: 'We couldn\'t create your SpeedCubeMuse account. Please try again.',
+                login_link_failed: 'We couldn\'t finish signing you in. Please try again.',
             };
             const el = document.getElementById('login-error');
             el.textContent = messages[errorParam] || 'Sign-in failed. Please try again.';

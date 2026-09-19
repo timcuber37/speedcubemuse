@@ -42,7 +42,7 @@ def _fernet() -> Fernet:
     SECRET_KEY invalidates in-flight games, which is the correct behaviour.
     """
     if not SECRET_KEY:
-        raise TokenError('SECRET_KEY is not configured')
+        raise TokenError('This game is unavailable right now. Please try again later.')
     digest = hashlib.sha256(SECRET_KEY.encode('utf-8')).digest()
     return Fernet(base64.urlsafe_b64encode(digest))
 
@@ -56,21 +56,21 @@ def seal(payload: dict) -> str:
 def unseal(token: str) -> dict:
     """Decrypt and validate a token. Raises TokenError on anything suspect."""
     if not token or not isinstance(token, str):
-        raise TokenError('missing token')
+        raise TokenError('We couldn\'t find your game. Please start a new game.')
     try:
         raw = _fernet().decrypt(token.encode('ascii'), ttl=TOKEN_TTL_SECONDS)
     except InvalidToken:
         # Covers tampering, a wrong key, and expiry alike. Deliberately not
         # distinguished in the message — a player probing the endpoint learns
         # nothing about which of those happened.
-        raise TokenError('invalid or expired game token')
+        raise TokenError('This game can no longer be continued. Please start a new game.')
     except (UnicodeEncodeError, ValueError):
-        raise TokenError('malformed game token')
+        raise TokenError('We couldn\'t load your game. Please start a new game.')
 
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
-        raise TokenError('malformed game token')
+        raise TokenError('We couldn\'t load your game. Please start a new game.')
     if not isinstance(payload, dict):
-        raise TokenError('malformed game token')
+        raise TokenError('We couldn\'t load your game. Please start a new game.')
     return payload

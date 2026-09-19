@@ -23,20 +23,24 @@
                         <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
                     </svg>
                 </a>
-                <button class="auth-btn" id="auth-btn" onclick="handleAuth()">Sign In</button>
+                <button class="auth-btn" id="auth-btn" onclick="handleAuth()">Sign in</button>
             </div>
         </div>
     </nav>
 
     <div class="container">
+        <header class="home-header">
+            <h1>Explore cubing results</h1>
+            <p class="subtitle">Ask about competitors, records, and competitions using World Cube Association (WCA) results.</p>
+        </header>
         <form id="query-form">
             <div class="search-bar">
                 <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="11" cy="11" r="8"></circle>
                     <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
                 </svg>
-                <input type="text" id="question" placeholder="Ask a question about WCA competitors, results, and competitions!" autocomplete="off" required>
-                <button type="submit" id="submit-btn">
+                <input type="text" id="question" aria-label="Your question about cubing results" placeholder="Who has the fastest 3x3 single?" autocomplete="off" required>
+                <button type="submit" id="submit-btn" aria-label="Ask question" title="Ask question">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <line x1="5" y1="12" x2="19" y2="12"></line>
                         <polyline points="12 5 19 12 12 19"></polyline>
@@ -44,18 +48,20 @@
                 </button>
             </div>
             <div class="model-select-row">
-                <label for="model-select" class="model-select-label">Model</label>
-                <select id="model-select" class="model-select">
-                    <option value="haiku">Haiku · fastest</option>
-                    <option value="sonnet" data-premium="1">Sonnet · balanced</option>
-                    <option value="opus" data-premium="1">Opus · most capable</option>
+                <label for="model-select" class="model-select-label">Answer mode</label>
+                <select id="model-select" class="model-select" aria-describedby="model-help">
+                    <option value="haiku">Quick · Haiku</option>
+                    <option value="sonnet" data-premium="1">Balanced · Sonnet</option>
+                    <option value="opus" data-premium="1">Complex questions · Opus</option>
                 </select>
             </div>
+            <!-- <p id="model-help" class="form-help">Start with Quick. The other options may take longer and require sign-in.</p> -->
+            <!-- <p class="form-help">Need help with competition rules? <a href="/delegate">Ask a Delegate</a>.</p> -->
         </form>
 
         <div id="loading" class="hidden">
             <div class="loading-bar"></div>
-            <span>Processing your question...</span>
+            <span>Looking up your answer...</span>
         </div>
 
         <div id="error" class="hidden"></div>
@@ -70,12 +76,13 @@
                         <polyline points="17 21 17 13 7 13 7 21"></polyline>
                         <polyline points="7 3 7 8 15 8"></polyline>
                     </svg>
-                    Save
+                    Save question
                 </button>
             </div>
             <div id="sql-display">
                 <details>
-                    <summary>Generated SQL</summary>
+                    <summary>Search details (SQL)</summary>
+                    <p class="form-help">The database instructions used to find these results.</p>
                     <code id="sql-code"></code>
                 </details>
             </div>
@@ -84,7 +91,7 @@
     </div>
 
     <footer class="footer">
-        <p>Data based on the <a href="https://www.worldcubeassociation.org/export/results" target="_blank" rel="noopener">WCA data export</a> from {{ db_meta.export_date_display }}.</p>
+        <p>Results from the <a href="https://www.worldcubeassociation.org/export/results" target="_blank" rel="noopener">WCA data published on {{ db_meta.export_date_display }}</a>. Newer results may not be included yet.</p>
     </footer>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -129,7 +136,7 @@
                 if (lastQuery) saveBtn.classList.remove('hidden');
             } else {
                 currentUser = null;
-                authBtn.textContent = 'Sign In';
+                authBtn.textContent = 'Sign in';
                 authBtn.classList.remove('signed-in');
                 saveBtn.classList.add('hidden');
             }
@@ -170,15 +177,15 @@
                 if (response.ok) {
                     saveBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg> Saved';
                     setTimeout(() => {
-                        saveBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg> Save';
+                        saveBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg> Save question';
                         saveBtn.disabled = false;
                     }, 2000);
                 } else {
-                    saveBtn.textContent = 'Error';
+                    saveBtn.textContent = 'Could not save. Try again';
                     saveBtn.disabled = false;
                 }
             } catch {
-                saveBtn.textContent = 'Error';
+                saveBtn.textContent = 'Could not save. Try again';
                 saveBtn.disabled = false;
             }
         }
@@ -202,7 +209,7 @@
         function updateModelOptions(signedIn) {
             premiumOptions.forEach(o => {
                 o.disabled = !signedIn;
-                o.textContent = signedIn ? o.dataset.baseLabel : `${o.dataset.baseLabel} 🔒`;
+                o.textContent = signedIn ? o.dataset.baseLabel : `${o.dataset.baseLabel} (sign in)`;
             });
             if (!signedIn && modelSelect.selectedOptions[0]?.dataset.premium) {
                 modelSelect.value = 'haiku';
@@ -237,7 +244,7 @@
 
             // Check guest query limit
             if (!currentUser && getGuestQueryCount() >= GUEST_QUERY_LIMIT) {
-                errorDiv.innerHTML = 'You\'ve reached the free query limit. <a href="/login" style="color:#4f6ef7;text-decoration:underline">Sign in</a> for unlimited queries.';
+                errorDiv.innerHTML = 'You\'ve used your 5 guest questions. <a href="/login" style="color:#4f6ef7;text-decoration:underline">Sign in</a> to keep asking questions.';
                 errorDiv.classList.remove('hidden');
                 return;
             }
@@ -261,7 +268,7 @@
                 const data = await response.json();
 
                 if (!response.ok) {
-                    errorDiv.textContent = data.error || 'Something went wrong.';
+                    errorDiv.textContent = data.error || 'We couldn\'t find an answer right now. Please try again.';
                     errorDiv.classList.remove('hidden');
                     return;
                 }
@@ -281,7 +288,7 @@
                 if (currentUser) saveBtn.classList.remove('hidden');
 
             } catch (err) {
-                errorDiv.textContent = 'Failed to connect to server.';
+                errorDiv.textContent = 'We couldn\'t connect. Check your internet connection and try again.';
                 errorDiv.classList.remove('hidden');
             } finally {
                 loading.classList.add('hidden');

@@ -112,7 +112,7 @@ def create_match(user_id: str, difficulty: str, wca_id: str) -> dict:
                 logger.error('match create failed: %s', e)
                 raise PvpError('Could not create the match.')
     else:
-        raise PvpError('Could not allocate a join code. Try again.')
+        raise PvpError('We couldn\'t create a match code. Please try again.')
 
     match = res.data[0]
     _set_secret(match['id'], user_id, wca_id)
@@ -128,7 +128,7 @@ def join_match(user_id: str, join_code: str, wca_id: str) -> dict:
 
     res = client.table('game_matches').select('*').eq('join_code', code).execute()
     if not res.data:
-        raise PvpError('No match with that code.')
+        raise PvpError('No match was found with that code. Check the code with your friend and try again.')
     match = res.data[0]
 
     if match['host_user'] == user_id:
@@ -160,7 +160,7 @@ def _require_in_pool(wca_id: str, difficulty: str) -> None:
     tiers = profiles.TIERS.get(difficulty, ())
     if row['tier'] not in tiers:
         raise PvpError(
-            f"{row['name']} isn't in the {difficulty} pool — pick someone better known."
+            f"{row['name']} isn't available on {difficulty.title()} difficulty. Choose another competitor."
         )
 
 

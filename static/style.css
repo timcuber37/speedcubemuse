@@ -127,9 +127,25 @@ h1 {
     font-size: 1.1rem;
 }
 
+.home-header {
+    text-align: center;
+}
+
+.form-help {
+    margin-top: 12px;
+    color: #6b7280;
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.form-help a {
+    color: #4f6ef7;
+}
+
 /* Model selector */
 .model-select-row {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: center;
     gap: 8px;
@@ -143,6 +159,7 @@ h1 {
 }
 
 .model-select {
+    max-width: 100%;
     font-size: 0.85rem;
     font-weight: 500;
     color: #4b5563;
@@ -201,6 +218,7 @@ h1 {
 
 #question {
     flex: 1;
+    min-width: 0;
     padding: 12px 14px;
     font-size: 1rem;
     border: none;
@@ -900,6 +918,7 @@ tr:hover td {
 
 .saved-card-header {
     display: flex;
+    flex-wrap: wrap;
     align-items: flex-start;
     justify-content: space-between;
     gap: 16px;
@@ -924,8 +943,9 @@ tr:hover td {
 }
 
 .saved-action-btn {
-    width: 32px;
-    height: 32px;
+    min-height: 32px;
+    padding: 6px 10px;
+    gap: 6px;
     border: 1px solid #e2e5ea;
     border-radius: 6px;
     background: #fff;
@@ -1279,6 +1299,48 @@ tr:hover td {
 
 /* Responsive */
 @media (max-width: 640px) {
+    .nav-inner {
+        height: auto;
+        flex-wrap: wrap;
+        gap: 12px;
+        padding: 12px 20px;
+    }
+
+    .nav-links {
+        width: 100%;
+        flex-wrap: wrap;
+    }
+
+    .nav-link {
+        padding: 8px 10px;
+        white-space: nowrap;
+    }
+
+    .profile-card {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 16px;
+        padding: 20px;
+    }
+
+    .profile-info, .profile-details {
+        min-width: 0;
+    }
+
+    .profile-stats {
+        flex-wrap: wrap;
+    }
+
+    .profile-email {
+        overflow-wrap: anywhere;
+    }
+
+    .command {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+
     .stats-grid {
         grid-template-columns: repeat(2, 1fr);
     }
@@ -1410,6 +1472,10 @@ tr:hover td {
     font-size: .95rem;
     background: #fff;
     color: #1a1a2e;
+    margin-bottom: 16px;
+}
+
+.game-panel .form-help {
     margin-bottom: 16px;
 }
 
