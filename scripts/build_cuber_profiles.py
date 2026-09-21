@@ -337,8 +337,8 @@ def fetch_rankings(cur, current_events: set[str]) -> dict[str, dict]:
     """Current world ranks, collapsed to the facts the game asks about.
 
     Single and average ranks are unioned and reduced to each person's best rank
-    per event, because "are they top 100 in 3x3" shouldn't depend on which of
-    the two the player had in mind.
+    per event. A top-100 single OR average qualifies for that event; a person
+    in both rankings still contributes only one event to top100_event_count.
 
     Continent and country ranks come along for the "currently holds a record"
     attributes. The record hierarchy needs no special handling here: rank 1 in

@@ -304,24 +304,28 @@ _RECORDS = [
 _RANKINGS = [
     # Every event a player is world top-100 in, not just 3x3. Stored as a set so
     # one attribute answers "are they top 100 in 4x4?", "...in any blind event?"
-    # and "...in 3x3?" instead of needing a boolean per event.
+    # and "...in 3x3?" instead of needing a boolean per event. Either the single
+    # or average ranking qualifies; being in both still counts as one event.
     Attribute(
         key='top100_events',
         kind='multi',
-        question='Are they currently in the world top 100 for {value}?',
+        question='Are they currently in the world top 100 for {value} '
+                 'in either the single or average rankings?',
         aliases=('top 100', 'ranked in', 'world ranking', 'top hundred'),
         event_valued=True,
     ),
     Attribute(
         key='top10_any',
         kind='bool',
-        question='Are they currently in the world top 10 for any event?',
+        question='Are they currently in the world top 10 for any event '
+                 'in either the single or average rankings?',
         aliases=('top 10', 'top ten', 'world top 10'),
     ),
     Attribute(
         key='top100_event_count',
         kind='numeric',
-        question='Are they in the world top 100 for at least {value} events?',
+        question='Are they in the world top 100 for at least {value} events, '
+                 'counting either single or average rankings?',
         aliases=('how many events top 100', 'top 100 events'),
         thresholds=(1, 2, 5),
     ),
