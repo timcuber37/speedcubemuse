@@ -374,3 +374,105 @@ def test_cached_entry_with_the_current_stamp_is_served(parser, monkeypatch):
     pred, error = parser.parse('do they have a world record')
     assert error is None
     assert pred == Predicate('has_wr', 'is', True)
+
+
+# ---------------------------------------------------------------------------
+# The fame index behind "see who each difficulty includes"
+# ---------------------------------------------------------------------------
+
+DIFFICULTY_LINK = '<a href="/game/cubers">See who each difficulty includes</a>'
+
+
+@pytest.mark.parametrize('page', ['/game', '/game/akinator', '/game/solo', '/game/pvp'])
+def test_difficulty_link_reaches_the_index(client, page):
+    """The link used to point back at /game, where it explained nothing.
+
+    Parametrized over every page carrying it because the four copies are
+    hand-written: repointing three and missing one is the likely failure, and it
+    looks fine until someone clicks the fourth.
+    """
+    html = client.get(page).get_data(as_text=True)
+    assert DIFFICULTY_LINK in html, f'{page} does not link to the fame index'
+
+
+def test_index_page_renders_without_the_database(client):
+    """The tier explanation is the part the link promises, so it is server-side.
+
+    A matrix read failure should cost the ranking table and nothing else — this
+    asserts the prose does not depend on one, which is why the route passes no
+    profile data to the template.
+    """
+    html = client.get('/game/cubers').get_data(as_text=True)
+    # The prose wraps across lines in the template, so match on it flattened
+    # rather than writing the template's line breaks into the assertion.
+    flat = ' '.join(html.split())
+
+    for difficulty in ('Easy', 'Normal', 'Hard', 'Everyone'):
+        assert f'>{difficulty}<' in flat, f'{difficulty} is not described on the page'
+    assert 'continental or world record' in flat, 'the Hard rule is not stated'
+    assert 'world top 100' in flat, 'the other half of the Hard rule is not stated'
+    assert 'at least five competitions' in flat, 'the Everyone rule is not stated'
+
+
+def test_event_weight_scale_is_read_off_the_schema(client):
+    """The scoring panel is built from EVENT_TIERS, not copied into the template.
+
+    A hand-copied list would go on describing the old weights after a retune
+    with nothing to catch it, so this checks a tier-2 and a tier-4 event landed
+    in the rendered page under their real weights.
+    """
+    from blueprints.game import _event_weight_scale
+
+    scale = {band['tier']: band for band in _event_weight_scale()}
+    assert scale[1]['events'] == ['3x3']
+    assert 'Pyraminx' in scale[2]['events']
+    assert 'Multi-Blind' in scale[4]['events']
+    assert scale[4]['weight'] < scale[1]['weight']
+
+    html = client.get('/game/cubers').get_data(as_text=True)
+    assert 'Multi-Blind' in html, 'the rendered page lost the low-weight events'
+
+
+def test_index_row_omits_what_a_cuber_has_not_done():
+    """Absent keys are most of the payload — see `_row`.
+
+    Sending `"wr": 0` for the ~1,700 rows that have no world record would add
+    roughly a third to a response that already runs to a few hundred kilobytes.
+    """
+    from services.game.fame_index import _row
+
+    plain = _row(7, {
+        'wca_id': '2016TEST01', 'name': 'Test Cuber',
+        'country_id': 'Cote d_Ivoire', 'continent_id': '_Africa',
+        'fame': 120, 'tier': 2,
+        'attrs': {'main_event': '333', 'wr_single_count': 0, 'cr_count': 0,
+                  'top100_event_count': 0, 'has_worlds_podium': False,
+                  'is_active': False},
+    })
+
+    assert plain['rank'] == 7
+    assert plain['event'] == '3x3' and plain['etier'] == 1
+    # WCA country ids substitute '_' for an apostrophe.
+    assert plain['country'] == "Cote d'Ivoire"
+    assert plain['continent'] == 'Africa'
+    for absent in ('wr', 'cr', 'top100', 'podium', 'active'):
+        assert absent not in plain, f'{absent} is sent even though it is empty'
+
+
+def test_world_record_count_sums_singles_and_averages():
+    """They are separate records in the WCA tables and separate attributes here.
+
+    A reader counting someone's world records counts both, so the badge that
+    says "121 WR" has to add them — reporting only singles would understate
+    every cuber in the table who has ever set a record average.
+    """
+    from services.game.fame_index import _row
+
+    row = _row(1, {
+        'wca_id': '2009TEST01', 'name': 'Record Holder',
+        'country_id': 'Australia', 'continent_id': '_Oceania',
+        'fame': 3120, 'tier': 1,
+        'attrs': {'wr_single_count': 70, 'wr_average_count': 51},
+    })
+
+    assert row['wr'] == 121

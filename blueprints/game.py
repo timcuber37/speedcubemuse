@@ -23,8 +23,10 @@ from config import (GAME_LIMIT_ASK, GAME_LIMIT_CHEAP, GAME_LIMIT_FREE,
                     SUPABASE_ANON_KEY, SUPABASE_URL)
 from extensions import limiter
 from services.auth import get_user_from_token
-from services.game import profiles, pvp, tokens
-from services.game.attributes import country_label, predicate_from_id
+from services.game import fame_index, profiles, pvp, tokens
+from services.game.attributes import (EVENT_TIER_WEIGHT, EVENT_TIERS,
+                                      country_label, event_label,
+                                      predicate_from_id)
 from services.game.engine import ANSWERS, MAX_QUESTIONS, answer_for, decode_log
 from services.game.profiles import DEFAULT_TIER, TIERS
 from services.game.question_parser import QuestionParser
@@ -123,6 +125,32 @@ def _page(template, **extra):
 @limiter.exempt
 def game_index():
     return _page('game/index.html')
+
+
+def _event_weight_scale():
+    """The event-weight table shown on /game/cubers, read off the live schema.
+
+    Built from EVENT_TIERS rather than written out in the template: the weights
+    are the most likely part of the fame score to be retuned, and a hand-copied
+    list would go on describing the old ranking without anything catching it.
+    """
+    by_tier: dict[int, list[str]] = {}
+    for event_id, tier in EVENT_TIERS.items():
+        by_tier.setdefault(tier, []).append(event_label(event_id))
+    return [{'tier': tier, 'weight': EVENT_TIER_WEIGHT[tier], 'events': events}
+            for tier, events in sorted(by_tier.items())]
+
+
+@game_bp.route('/game/cubers')
+@limiter.exempt
+def game_cubers():
+    """Who each difficulty includes, and why they rank where they do.
+
+    Renders without touching the database — the tier explanation is the thing
+    the link promises, and it should not wait on a matrix read or vanish when
+    one fails. The ranking arrives from /api/game/cubers once the page is up.
+    """
+    return _page('game/cubers.html', event_scale=_event_weight_scale())
 
 
 @game_bp.route('/game/akinator')
@@ -420,6 +448,29 @@ def pvp_resign(match_id):
 # ---------------------------------------------------------------------------
 # Shared
 # ---------------------------------------------------------------------------
+
+@game_bp.route('/api/game/cubers')
+@limiter.exempt
+def cuber_index():
+    """The ranked fame index for /game/cubers.
+
+    Sent as one payload rather than paged: the table sorts and filters in the
+    browser, and a page-per-scroll would mean a round trip every time someone
+    changed a filter to answer a question they could otherwise answer at once.
+    """
+    index = fame_index.get_index()
+    if not index['rows']:
+        return jsonify({
+            'error': 'We couldn\'t load the rankings right now. Please try again shortly.'
+        }), 503
+
+    response = jsonify(index)
+    # The matrix is rebuilt weekly and the server-side cache holds for an hour,
+    # so a browser copy of the same age costs nothing and saves re-sending ~1,000
+    # rows to anyone who opens the page twice.
+    response.headers['Cache-Control'] = 'public, max-age=3600'
+    return response
+
 
 @game_bp.route('/api/game/question/<path:pred_id>')
 @limiter.exempt

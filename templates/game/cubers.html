@@ -1,0 +1,401 @@
+{# The page behind "See who each difficulty includes".
+
+   Two jobs, in this order: say what each difficulty admits, then show the
+   ranking those admissions are sliced from. The prose renders server-side so
+   the question in the link is answered before the ~1,800-row table arrives. #}
+{% extends "game/_base.html" %}
+{% block title %}Cuber Fame Index{% endblock %}
+
+{% block content %}
+<div class="game-header">
+    <h1>Cuber Fame Index</h1>
+    <p class="subtitle">
+        Find out who appears in each game difficulty. This index uses competition
+        achievements to estimate how familiar a competitor's name may be.
+    </p>
+    <p class="form-help"><a href="/game">&larr; Back to Guess the Cuber</a></p>
+</div>
+
+<div class="tier-cards">
+    <div class="tier-card tier-card-1">
+        <div class="tier-card-head">
+            <span class="tier-pill tier-1">Easy</span>
+            <span class="tier-card-count"><b data-tier-count="1">300</b> cubers</span>
+        </div>
+        <p>
+            The top <b data-tier-count="1">300</b> competitors by fame score.
+            Start here for the names you are most likely to recognize.
+        </p>
+    </div>
+
+    <div class="tier-card tier-card-2">
+        <div class="tier-card-head">
+            <span class="tier-pill tier-2">Normal</span>
+            <span class="tier-card-count"><b data-tier-cumulative="2">1,000</b> cubers</span>
+        </div>
+        <p>
+            Everyone in Easy, plus the next <b data-tier-count="2">700</b>
+            competitors by score. A wider selection for players who follow more events.
+        </p>
+    </div>
+
+    <div class="tier-card tier-card-3">
+        <div class="tier-card-head">
+            <span class="tier-pill tier-3">Hard</span>
+            <span class="tier-card-count"><b data-tier-cumulative="3">All</b> competitors</span>
+        </div>
+        <p>
+            Everyone in this index, including Easy and Normal. Each competitor
+            has set a continental or world record, or is in the world top 100
+            for a current event in either single or average rankings.
+        </p>
+    </div>
+
+    <div class="tier-card tier-card-4">
+        <div class="tier-card-head">
+            <span class="tier-pill tier-4">Everyone</span>
+            <span class="tier-card-count">Widest selection</span>
+        </div>
+        <p>
+            In <em>You guess mine</em>, any competitor in our WCA results.
+            In <em>I'll guess yours</em> and <em>Head to head</em>, everyone in Hard
+            plus competitors with at least five competitions. These additional
+            competitors are not listed in this index.
+        </p>
+    </div>
+</div>
+
+<section class="fame-formula" aria-labelledby="fame-explanation">
+    <h2 id="fame-explanation">How the fame score works</h2>
+    <p>
+        Records, World Championship medals and high rankings add to a competitor's
+        score. Recent achievements count more, and events have different weights.
+        SpeedCubeMuse uses this score to choose the competitors for each difficulty.
+    </p>
+    <details class="fame-details">
+        <summary>See scoring details</summary>
+        <h3>Starting points</h3>
+        <div class="fame-terms">
+            <span class="fame-term"><b>6 points</b> per world record</span>
+            <span class="fame-term"><b>3 points</b> per continental record</span>
+            <span class="fame-term"><b>2 points</b> per World Championship medal</span>
+        </div>
+        <p>Single and average records both count. The event and the age of each
+           achievement change how many points it adds.</p>
+
+        <div class="fame-scales">
+            <div class="fame-scale fame-event-scale">
+                <h3>Event weights</h3>
+                <p>Records, medals and current rankings are multiplied by the event's
+                   weight. These weights are SpeedCubeMuse's estimate of how widely
+                   each event is followed.</p>
+                {% for band in event_scale %}
+                <div class="fame-step fame-step-{{ band.tier }}">
+                    <b>{{ band.events|join(', ') }}</b>
+                    <span>&times;{{ '%.2f'|format(band.weight) }}</span>
+                </div>
+                {% endfor %}
+                <p>Retired events use the lowest weight for past records and medals.</p>
+            </div>
+            <div class="fame-scale">
+                <h3>Current world rankings</h3>
+                <p>Each event earns points once, using the better of the competitor's
+                   single and average rankings.</p>
+                <div class="fame-step fame-step-1"><b>Ranks 1&ndash;25</b><span>3 points</span></div>
+                <div class="fame-step fame-step-2"><b>Ranks 26&ndash;100</b><span>1 point</span></div>
+                <div class="fame-step fame-step-3"><b>Ranks 101&ndash;500</b><span>0.3 points</span></div>
+                <div class="fame-step fame-step-4"><b>Below the top 500</b><span>0 points</span></div>
+                <p>A top-500 ranking can increase a score. To enter this index, a
+                   competitor still needs a continental or world record, or a top-100 ranking.</p>
+            </div>
+            <div class="fame-scale">
+                <h3>When the achievement happened</h3>
+                <p>Older records and World Championship medals keep a smaller share
+                   of their points:</p>
+                <div class="fame-step fame-step-1"><b>This year</b><span>100%</span></div>
+                <div class="fame-step fame-step-2"><b>5 years ago</b><span>60%</span></div>
+                <div class="fame-step fame-step-3"><b>10 years ago</b><span>40%</span></div>
+                <div class="fame-step fame-step-4"><b>20 years ago</b><span>25%</span></div>
+                <p>The share gradually decreases, but never falls below 20%.</p>
+            </div>
+        </div>
+        <h3>Other contributions</h3>
+        <ul class="fame-bonuses">
+            <li>Competed this year or last year: 5 extra points. If their latest
+                competition was two or three years ago: 2 extra points.</li>
+            <li>Currently holds a world record: up to 8 extra points, adjusted for
+                the highest-weighted event in which they hold one.</li>
+            <li>More recorded results add a small bonus. Each additional result
+                contributes less as the total grows.</li>
+        </ul>
+        <p class="fame-caveat">
+            The total is multiplied by 10 and rounded to give the score below.
+            Easy and Normal are based on a competitor's position in this list,
+            so there is no fixed score needed to enter either difficulty.
+        </p>
+    </details>
+</section>
+
+<section aria-labelledby="fame-ranking-title">
+    <h2 id="fame-ranking-title" class="fame-ranking-title">Find a competitor</h2>
+    <p class="fame-ranking-help" id="fame-ranking-help">
+        Filter by the difficulty you want to play. Normal includes Easy, and Hard
+        includes both. &ldquo;Starts in&rdquo; shows the first difficulty that includes
+        each competitor. Click Rank, Competitor or Score to change the order.
+    </p>
+    <fieldset class="fame-controls" id="fame-controls" disabled>
+        <legend class="fame-sr-only">Filter competitors</legend>
+        <label class="fame-field fame-search-field" for="fame-q">
+            <span>Search competitors</span>
+            <input type="search" id="fame-q" class="fame-search" autocomplete="off"
+                   placeholder="Name, country, WCA ID or strongest event">
+        </label>
+        <label class="fame-field" for="fame-tier">
+            <span>Game difficulty</span>
+            <select id="fame-tier">
+                <option value="">All difficulties</option>
+                <option value="1">Easy</option>
+                <option value="2">Normal</option>
+                <option value="3">Hard</option>
+            </select>
+        </label>
+        <label class="fame-field" for="fame-continent">
+            <span>Continent</span>
+            <select id="fame-continent">
+                <option value="">All continents</option>
+            </select>
+        </label>
+        <div class="fame-toggles">
+            <label class="fame-toggle" for="fame-wr">
+                <input type="checkbox" id="fame-wr"> Has set a world record
+            </label>
+            <label class="fame-toggle" for="fame-active">
+                <input type="checkbox" id="fame-active"> Competed this year or last
+            </label>
+            <button type="button" id="fame-reset" class="game-btn-link">Clear filters</button>
+        </div>
+    </fieldset>
+
+    <p class="fame-count" id="fame-count" role="status" aria-live="polite" aria-atomic="true">Loading competitors&hellip;</p>
+    <button type="button" id="fame-retry" class="game-btn game-btn-secondary" hidden>Try loading again</button>
+
+    <div class="fame-scroller" tabindex="0" role="region" aria-label="Competitor rankings" aria-busy="true">
+        <table class="fame-table" aria-describedby="fame-ranking-help fame-highlights-help">
+            <caption class="fame-sr-only">Competitors ranked by SpeedCubeMuse fame score</caption>
+            <colgroup>
+                <col class="fame-col-rank"><col class="fame-col-who"><col class="fame-col-score">
+                <col class="fame-col-where"><col class="fame-col-event"><col class="fame-col-highlights"><col class="fame-col-tier">
+            </colgroup>
+            <thead>
+                <tr>
+                    <th scope="col" aria-sort="ascending"><button class="fame-sortable" data-key="rank">Rank<span class="fame-arrow" aria-hidden="true">&uarr;</span></button></th>
+                    <th scope="col"><button class="fame-sortable" data-key="name">Competitor<span class="fame-arrow" aria-hidden="true">&uarr;</span></button></th>
+                    <th scope="col"><button class="fame-sortable" data-key="fame">Score<span class="fame-arrow" aria-hidden="true">&uarr;</span></button></th>
+                    <th scope="col" class="fame-col-where">Represents</th>
+                    <th scope="col" class="fame-col-event">Strongest event</th>
+                    <th scope="col" class="fame-col-highlights">Highlights</th>
+                    <th scope="col" class="fame-col-tier">Starts in</th>
+                </tr>
+            </thead>
+            <tbody id="fame-body"><tr><td colspan="7" class="fame-empty">Loading competitors&hellip;</td></tr></tbody>
+        </table>
+    </div>
+    <p class="fame-note" id="fame-highlights-help">
+        Record counts include past single and average records. Top-100 badges count
+        events where either ranking qualifies. Strongest event means the event with
+        their best current world rank. Score bars use a compressed scale so smaller
+        scores stay visible.
+    </p>
+    <p class="fame-note">
+        Scores and rankings are updated with our weekly WCA results refresh. They can
+        change as competitors earn new results and older achievements carry less weight.
+        Select a WCA ID to open the competitor's official profile.
+    </p>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Match the game's cumulative difficulties: Easy <= 1, Normal <= 2, Hard <= 3.
+    const TIER_NAMES = { 1: 'Easy', 2: 'Normal', 3: 'Hard' };
+
+    let ROWS = [];
+    let easyCut = 0, normalCut = 0;
+    let sortKey = 'rank', sortDir = 1;
+    let logMin = 0, logSpan = 1;
+
+    const $ = id => document.getElementById(id);
+    const nf = n => Number(n).toLocaleString();
+
+    function mount(data) {
+        ROWS = data.rows;
+        const sizes = data.tier_sizes || {};
+        easyCut = Number(sizes['1'] || 0);
+        normalCut = easyCut + Number(sizes['2'] || 0);
+
+        // The cuts are stated in the prose above; fill them from the data rather
+        // than leaving three hand-written numbers to go stale after a rebuild.
+        document.querySelectorAll('[data-tier-count]').forEach(el => {
+            const n = sizes[el.dataset.tierCount];
+            if (n != null) el.textContent = nf(n);
+        });
+        document.querySelectorAll('[data-tier-cumulative]').forEach(el => {
+            const upto = Number(el.dataset.tierCumulative);
+            let total = 0;
+            for (let t = 1; t <= upto; t++) total += Number(sizes[String(t)] || 0);
+            el.textContent = nf(total);
+        });
+
+        // Rank 1 outscores the bottom of the pool by well over a hundred times,
+        // so a linear bar would leave everything below the first few rows at
+        // zero width. Log scale, with a floor that keeps the last row visible.
+        const fames = ROWS.map(r => Math.max(r.fame, 1));
+        logMin = Math.log10(Math.min(...fames));
+        logSpan = Math.log10(Math.max(...fames)) - logMin || 1;
+
+        const continents = [...new Set(ROWS.map(r => r.continent).filter(Boolean))].sort();
+        $('fame-continent').insertAdjacentHTML('beforeend',
+            continents.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join(''));
+
+        $('fame-controls').disabled = false;
+        render();
+    }
+
+    const barWidth = f => (4 + 96 * (Math.log10(Math.max(f, 1)) - logMin) / logSpan).toFixed(1);
+
+    function chips(r) {
+        const out = [];
+        if (r.wr)     out.push(`<span class="fame-chip is-wr">${nf(r.wr)} world record${r.wr === 1 ? '' : 's'}</span>`);
+        if (r.cr)     out.push(`<span class="fame-chip is-cr">${nf(r.cr)} continental record${r.cr === 1 ? '' : 's'}</span>`);
+        if (r.podium) out.push(`<span class="fame-chip is-podium">World Championship medal</span>`);
+        if (r.top100) out.push(`<span class="fame-chip is-top">Top 100 in ${nf(r.top100)} event${r.top100 === 1 ? '' : 's'}</span>`);
+        if (r.active) out.push(`<span class="fame-chip is-active">Competed recently</span>`);
+        return out.join('');
+    }
+
+    // A tier boundary is a real fact about the data, so it is drawn as one —
+    // above the first row of the tier it opens.
+    function divider(rank, label) {
+        return `<tr class="fame-divider"><td colspan="7">
+            ${label} adds competitors from rank ${nf(rank)}
+        </td></tr>`;
+    }
+
+    function row(r) {
+        const highlights = chips(r);
+        const tier = `<span class="tier-pill tier-${Number(r.tier)}">${esc(TIER_NAMES[r.tier] || r.tier)}</span>`;
+        return `
+            <tr>
+                <td class="fame-rank${r.rank <= 3 ? ' is-podium3' : ''}">${nf(r.rank)}</td>
+                <td class="fame-who">
+                    <span class="fame-name">${esc(r.name)}</span>
+                    <a class="fame-wcaid" target="_blank" rel="noopener"
+                       href="https://www.worldcubeassociation.org/persons/${encodeURIComponent(r.id)}">${esc(r.id)}</a>
+                    <div class="fame-mobile-meta">
+                        <span>${esc(r.country)}</span>
+                        <span>Strongest event: ${esc(r.event || 'Not available')}</span>
+                        <span>Starts in ${tier}</span>
+                        <div class="fame-chips">${highlights}</div>
+                    </div>
+                </td>
+                <td class="fame-score">
+                    <span class="fame-bar-row">
+                        <span class="fame-val">${nf(r.fame)}</span>
+                        <span class="fame-track" aria-hidden="true"><span class="fame-fill" style="width:${barWidth(r.fame)}%"></span></span>
+                    </span>
+                </td>
+                <td class="fame-where fame-col-where">${esc(r.country)}</td>
+                <td class="fame-event fame-col-event">${esc(r.event || '—')}</td>
+                <td class="fame-col-highlights"><div class="fame-chips">${highlights}</div></td>
+                <td class="fame-col-tier">${tier}</td>
+            </tr>`;
+    }
+
+    function render() {
+        const q = $('fame-q').value.trim().toLowerCase();
+        const tier = $('fame-tier').value;
+        const cont = $('fame-continent').value;
+        const wrOnly = $('fame-wr').checked;
+        const actOnly = $('fame-active').checked;
+
+        const list = ROWS.filter(r => {
+            if (tier && Number(r.tier) > Number(tier)) return false;
+            if (cont && r.continent !== cont) return false;
+            if (wrOnly && !r.wr) return false;
+            if (actOnly && !r.active) return false;
+            if (!q) return true;
+            return `${r.name} ${r.country} ${r.id} ${r.event || ''}`.toLowerCase().includes(q);
+        });
+
+        list.sort((a, b) => {
+            const A = a[sortKey], B = b[sortKey];
+            const cmp = typeof A === 'string' ? A.localeCompare(B) : A - B;
+            return cmp * sortDir;
+        });
+
+        // The dividers only mean anything in an unfiltered, rank-ordered view.
+        const plain = !q && !tier && !cont && !wrOnly && !actOnly
+                      && sortKey === 'rank' && sortDir === 1;
+
+        $('fame-body').innerHTML = list.length
+            ? list.map((r, i) => {
+                let out = '';
+                if (plain && easyCut && i === easyCut) out += divider(r.rank, 'Normal');
+                if (plain && normalCut && i === normalCut) out += divider(r.rank, 'Hard');
+                return out + row(r);
+              }).join('')
+            : `<tr><td colspan="7" class="fame-empty">No competitors match. Try a different search or clear the filters.</td></tr>`;
+
+        const withWr = list.filter(r => r.wr).length;
+        $('fame-count').textContent = list.length
+            ? `${nf(list.length)} of ${nf(ROWS.length)} shown · `
+              + `${nf(withWr)} ${withWr === 1 ? 'has' : 'have'} set a world record`
+            : `0 of ${nf(ROWS.length)} shown`;
+    }
+
+    ['fame-q', 'fame-tier', 'fame-continent', 'fame-wr', 'fame-active']
+        .forEach(id => $(id).addEventListener('input', render));
+
+    $('fame-reset').addEventListener('click', () => {
+        ['fame-q', 'fame-tier', 'fame-continent'].forEach(id => $(id).value = '');
+        ['fame-wr', 'fame-active'].forEach(id => $(id).checked = false);
+        render();
+    });
+
+    document.querySelectorAll('.fame-sortable').forEach(button => {
+        button.addEventListener('click', () => {
+            if (!ROWS.length) return;
+            const key = button.dataset.key;
+            if (sortKey === key) sortDir *= -1;
+            else { sortKey = key; sortDir = key === 'fame' ? -1 : 1; }
+            document.querySelectorAll('.fame-table th').forEach(th => th.removeAttribute('aria-sort'));
+            button.closest('th').setAttribute('aria-sort', sortDir === 1 ? 'ascending' : 'descending');
+            button.querySelector('.fame-arrow').textContent = sortDir === 1 ? '↑' : '↓';
+            render();
+        });
+    });
+
+    async function loadRanking() {
+        $('fame-controls').disabled = true;
+        $('fame-retry').hidden = true;
+        $('fame-count').textContent = 'Loading competitors…';
+        $('fame-body').innerHTML = '<tr><td colspan="7" class="fame-empty">Loading competitors…</td></tr>';
+        document.querySelector('.fame-scroller').setAttribute('aria-busy', 'true');
+        try {
+            const response = await fetch('/api/game/cubers');
+            const data = await response.json();
+            if (!response.ok || !Array.isArray(data.rows) || !data.rows.length) throw new Error('Ranking unavailable');
+            mount(data);
+        } catch (_) {
+            $('fame-count').textContent = "We couldn't load the rankings. Please try again.";
+            $('fame-body').innerHTML = '<tr><td colspan="7" class="fame-empty">The difficulty descriptions above are still available.</td></tr>';
+            $('fame-retry').hidden = false;
+        } finally {
+            document.querySelector('.fame-scroller').setAttribute('aria-busy', 'false');
+        }
+    }
+
+    $('fame-retry').addEventListener('click', loadRanking);
+    loadRanking();
+</script>
+{% endblock %}
