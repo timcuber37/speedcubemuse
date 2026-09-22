@@ -22,7 +22,10 @@
 <div id="play" class="game-panel hidden">
     <div class="game-progress">
         <span id="progress-text"></span>
-        <button id="restart-btn" class="game-btn-link">Start over</button>
+        <div class="game-progress-actions">
+            <button type="button" id="undo-btn" class="game-btn-link" disabled>Undo last answer</button>
+            <button type="button" id="restart-btn" class="game-btn-link">Start over</button>
+        </div>
     </div>
 
     <div id="question-box" class="question-box"></div>
@@ -65,15 +68,20 @@
     function show(id) { $(id).classList.remove('hidden'); }
     function hide(id) { $(id).classList.add('hidden'); }
 
+    function setBusy(value) {
+        busy = value;
+        $('undo-btn').disabled = busy || answers.length === 0;
+    }
+
     async function turn() {
         if (busy) return;
-        busy = true;
+        setBusy(true);
         $('answer-buttons').innerHTML = '<div class="game-thinking">Thinking…</div>';
 
         const data = await postJSON('/api/game/akinator/turn', {
             difficulty, answers, rejected,
         });
-        busy = false;
+        setBusy(false);
 
         if (data.error && !data.guess) {
             $('question-box').innerHTML = `<p class="game-error">${esc(data.error)}</p>`;
@@ -115,6 +123,21 @@
         $('history').appendChild(li);
     }
 
+    function undoLastAnswer() {
+        if (busy || answers.length === 0) return;
+
+        answers.pop();
+        $('history').lastElementChild?.remove();
+
+        hide('result');
+        show('play');
+        $('history-label').textContent = 'Your answers so far';
+        $('history-wrap').open = false;
+        if (answers.length === 0) hide('history-wrap');
+
+        turn();
+    }
+
     function revealHistory(label) {
         // Open it on the way out: mid-game it is a collapsed aside, but once
         // the game is over it is the thing people actually want to look at.
@@ -131,7 +154,10 @@
         if (!data.guess) {
             $('result').innerHTML = `
                 <p class="game-error">${esc(data.error || 'I couldn\'t find a competitor that fits your answers.')}</p>
-                <button class="game-btn game-btn-primary" onclick="location.reload()">Try again</button>`;
+                <div class="guess-actions">
+                    <button class="game-btn game-btn-primary" onclick="location.reload()">Try again</button>
+                    <button type="button" class="game-btn" data-undo-answer>Undo last answer</button>
+                </div>`;
             return;
         }
 
@@ -154,6 +180,7 @@
                 <div class="guess-actions">
                     <button id="right-btn" class="game-btn game-btn-primary">That's them</button>
                     <button id="wrong-btn" class="game-btn">Try someone else</button>
+                    <button type="button" class="game-btn" data-undo-answer>Undo last answer</button>
                 </div>
             </div>`;
         mountAvatar($('guess-avatar'), g.wca_id, g.name);
@@ -197,7 +224,10 @@
                             <span class="shortlist-meta">${esc(o.country)} · ${Math.round((o.confidence || 0) * 100)}% confident</span>
                         </button>`).join('')}
                 </div>
-                <button id="none-btn" class="game-btn">None of these</button>
+                <div class="guess-actions">
+                    <button id="none-btn" class="game-btn">None of these</button>
+                    <button type="button" class="game-btn" data-undo-answer>Undo last answer</button>
+                </div>
             </div>`;
 
         $('result').querySelectorAll('.shortlist-option').forEach(btn => {
@@ -237,6 +267,10 @@
         turn();
     });
 
+    $('undo-btn').addEventListener('click', undoLastAnswer);
+    $('result').addEventListener('click', event => {
+        if (event.target.closest('[data-undo-answer]')) undoLastAnswer();
+    });
     $('restart-btn').addEventListener('click', () => location.reload());
 </script>
 {% endblock %}

@@ -326,6 +326,17 @@ def test_avatar_helper_skips_competitors_without_a_photo(client):
     )
 
 
+def test_akinator_page_offers_undo_for_answer_mistakes(client):
+    """Undo stays available during questioning and before confirming a guess."""
+    html = client.get('/game/akinator').get_data(as_text=True)
+
+    assert 'id="undo-btn"' in html
+    assert 'Undo last answer' in html
+    assert 'answers.pop()' in html
+    assert "$('history').lastElementChild?.remove()" in html
+    assert 'data-undo-answer' in html
+
+
 # ---------------------------------------------------------------------------
 # Cache versioning
 # ---------------------------------------------------------------------------

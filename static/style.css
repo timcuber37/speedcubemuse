@@ -1514,6 +1514,12 @@ tr:hover td {
 
 .game-btn-link:hover { color: #4f6ef7; }
 
+.game-btn-link:disabled {
+    color: #b6bbc4;
+    cursor: not-allowed;
+    text-decoration: none;
+}
+
 .game-progress {
     display: flex;
     justify-content: space-between;
@@ -1523,6 +1529,12 @@ tr:hover td {
     margin-bottom: 20px;
     padding-bottom: 14px;
     border-bottom: 1px solid #f0f1f3;
+}
+
+.game-progress-actions {
+    display: flex;
+    align-items: center;
+    gap: 14px;
 }
 
 .question-box {
