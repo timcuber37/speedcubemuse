@@ -109,9 +109,19 @@ eliminating it and the search can recover.
 
 Predicates are evaluated on demand rather than indexed: a precomputed
 predicate→rows map costs ~140 MB at 52k candidates against ~62 MB for the rows
-themselves, while `Predicate.test()` runs in 0.06 µs. Question scoring samples
-the candidates once the pool is large, which holds a turn at ~150 ms whatever
-the pool size — unsampled it took 36 seconds at full scale.
+themselves. Question scoring uses at most 3,000 sampled candidates, groups their
+probability by attribute value, and scores each question from the total mass on
+its two sides. This is the same noisy yes/no information gain as constructing
+both full posterior distributions, with far fewer repeated evaluations and
+logarithms. The sample size, belief updates, and stopping thresholds are unchanged.
+
+On a local benchmark of the September 22, 2026 pool (52,051 candidates), opening
+question selection fell from 151 ms to 12 ms, and turn 10 from 135 ms to 11 ms,
+with the same questions selected for the same random sample. These timings do
+not reproduce the Fly timeout or measure production latency. The turn endpoint
+logs `akinator stage=load`, `stage=replay`, and `stage=pick` with elapsed and CPU
+milliseconds, including on a worker abort, to distinguish slow loading from
+scoring and help investigate CPU contention.
 
 Measured by self-play:
 
@@ -195,7 +205,7 @@ on confidence around question 13.
 
 Only free-text questions reach a model, and only to map wording onto a known
 attribute (`"are they retired?"` → `is_active is false`). That is a small
-classification task on Haiku with a cached system prompt, and results are cached
+classification task on Haiku with a reusable system prompt, and results are cached
 by normalized question text in two tiers — per-process, then a shared
 `game_question_cache` table. A repeat question resolves in about a millisecond
 and costs nothing.
@@ -395,6 +405,21 @@ COMMAND_PREFIX=!wca
 ```bash
 python app.py
 ```
+
+### Review API usage and cost
+
+API operations record token usage and estimated USD costs in application logs
+and the shared WCA database. After deployment, compare the last month's usage:
+
+```bash
+python scripts/usage_report.py --days 30
+python scripts/usage_report.py --days 7 --group-by operation,model,source
+```
+
+The report separates SQL generation, repair, summaries, Delegate pipeline
+steps, game parsing/cache hits, and regulation embedding jobs. See
+[API usage and optimization](docs/api-usage.md) for exports, configuration,
+billing limitations, and the initial cost audit.
 
 ### Run the Discord bot
 

@@ -5,12 +5,10 @@ that means `continent_id == '_Europe'`. That is a small classification problem
 over a closed vocabulary, not a database query — so it runs on Haiku with a
 tight output schema, and the answer is cached.
 
-Cost, at Haiku 4.5 ($1/$5 per MTok, cache reads ~0.1x): the vocabulary system
-prompt is ~1,200 tokens and identical on every request, so it is cached and
-read back at roughly a tenth of list price; the question and the JSON reply are
-a few dozen tokens each. That lands near $0.0005 a question before the
-predicate cache, and the cache absorbs most repeats — "are they American?" gets
-typed in a great many games.
+The vocabulary system prompt is identical on every request, but provider
+prompt caching only applies if it meets the model's minimum token threshold.
+The separate predicate cache avoids API calls for repeated questions. Use
+scripts/usage_report.py to measure both savings and actual token consumption.
 
 Sync client, like services/rag.py: this path is web-only, so there is no event
 loop to block, and the Discord bot never reaches it.
@@ -26,6 +24,7 @@ from collections import OrderedDict
 import certifi
 import pymysql
 from anthropic import Anthropic
+from services.api_usage import APICall, record_cache_hit
 
 from config import (
     ANTHROPIC_API_KEY, DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, DB_SSL,
@@ -345,9 +344,11 @@ class QuestionParser:
         cached = self._cache_get(key)
         if cached is not None and cached.get('v') == _SCHEMA_VERSION:
             if cached.get('error'):
+                record_cache_hit('game.parse_question', self.model)
                 return None, cached['error']
             pred = self._to_predicate(cached)
             if pred:
+                record_cache_hit('game.parse_question', self.model)
                 return pred, None
             # Belt and braces: the stamp matched but the payload still doesn't
             # resolve. Re-ask rather than serve something broken.
@@ -378,28 +379,24 @@ class QuestionParser:
         return pred, None
 
     def _ask_model(self, question: str) -> dict:
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=150,
-            # Identical on every request, so it is read back from cache at
-            # roughly a tenth of the input price.
-            system=[{
-                'type': 'text',
-                'text': self.system_prompt,
-                'cache_control': {'type': 'ephemeral'},
-            }],
-            messages=[{'role': 'user', 'content': question.strip()}],
-            output_config={'format': _OUTPUT_FORMAT},
-            # Haiku 4.5 does not run thinking unless asked, but being explicit
-            # keeps latency predictable if the default model is ever changed.
-            thinking={'type': 'disabled'},
-        )
-        usage = response.usage
-        logger.info(
-            'game question parse: model=%s cache_read=%s cache_write=%s',
-            response.model, usage.cache_read_input_tokens,
-            usage.cache_creation_input_tokens,
-        )
+        with APICall('game.parse_question', 'anthropic', self.model) as call:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=150,
+                # Reused at the cache-read price when the prefix meets the
+                # model's minimum length. Usage metering verifies actual hits.
+                system=[{
+                    'type': 'text',
+                    'text': self.system_prompt,
+                    'cache_control': {'type': 'ephemeral'},
+                }],
+                messages=[{'role': 'user', 'content': question.strip()}],
+                output_config={'format': _OUTPUT_FORMAT},
+                # Haiku 4.5 does not run thinking unless asked, but being explicit
+                # keeps latency predictable if the default model is ever changed.
+                thinking={'type': 'disabled'},
+            )
+            call.capture(response)
         text = next((b.text for b in response.content if b.type == 'text'), '')
         return json.loads(text)
 

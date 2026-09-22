@@ -10,6 +10,7 @@ from config import (ANTHROPIC_API_KEY, ANTHROPIC_MODEL, DELEGATE_MAX_HISTORY_TUR
                     DELEGATE_RERANK_INITIAL_K, DELEGATE_RETRIEVAL_K,
                     VOYAGE_API_KEY, VOYAGE_EMBED_MODEL, VOYAGE_RERANK_MODEL)
 from services.auth import get_supabase
+from services.api_usage import APICall
 
 logger = logging.getLogger(__name__)
 
@@ -131,22 +132,26 @@ class DelegateRAGService:
                 'content': f"Follow-up question: {question}\n\nRewritten standalone query:",
             })
 
-            resp = self.anthropic.messages.create(
-                model=REWRITER_MODEL,
-                max_tokens=120,
-                temperature=0,
-                system=_REWRITER_SYSTEM,
-                messages=convo,
-            )
+            with APICall('delegate.rewrite', 'anthropic', REWRITER_MODEL) as call:
+                resp = self.anthropic.messages.create(
+                    model=REWRITER_MODEL,
+                    max_tokens=120,
+                    temperature=0,
+                    system=_REWRITER_SYSTEM,
+                    messages=convo,
+                )
+                call.capture(resp)
             return self._first_text(resp).strip() or question
         except Exception as e:
             logger.warning("Query rewrite failed, using raw question: %s", e)
             return question
 
     def _embed(self, text: str) -> list[float]:
-        result = self.voyage.embed(
-            [text], model=VOYAGE_EMBED_MODEL, input_type='query'
-        )
+        with APICall('delegate.embed', 'voyage', VOYAGE_EMBED_MODEL) as call:
+            result = self.voyage.embed(
+                [text], model=VOYAGE_EMBED_MODEL, input_type='query'
+            )
+            call.capture(result)
         return result.embeddings[0]
 
     def _retrieve_vector(self, query: str, k: int) -> list[dict]:
@@ -163,12 +168,14 @@ class DelegateRAGService:
             return hits
         docs = [self._format_for_rerank(h) for h in hits]
         try:
-            result = self.voyage.rerank(
-                query=query,
-                documents=docs,
-                model=VOYAGE_RERANK_MODEL,
-                top_k=top_n,
-            )
+            with APICall('delegate.rerank', 'voyage', VOYAGE_RERANK_MODEL) as call:
+                result = self.voyage.rerank(
+                    query=query,
+                    documents=docs,
+                    model=VOYAGE_RERANK_MODEL,
+                    top_k=top_n,
+                )
+                call.capture(result)
             return [hits[r.index] for r in result.results]
         except Exception as e:
             logger.warning("Rerank failed, falling back to vector order: %s", e)
@@ -286,12 +293,14 @@ class DelegateRAGService:
                 messages.append({'role': role, 'content': content})
         messages.append({'role': 'user', 'content': question})
 
-        resp = self.anthropic.messages.create(
-            model=self.model,
-            # Headroom for adaptive thinking (on by default for current models),
-            # which counts against max_tokens alongside the visible answer.
-            max_tokens=2048,
-            system=system,
-            messages=messages,
-        )
+        with APICall('delegate.answer', 'anthropic', self.model) as call:
+            resp = self.anthropic.messages.create(
+                model=self.model,
+                # Headroom for adaptive thinking (on by default for current models),
+                # which counts against max_tokens alongside the visible answer.
+                max_tokens=2048,
+                system=system,
+                messages=messages,
+            )
+            call.capture(resp)
         return self._first_text(resp).strip()

@@ -89,3 +89,7 @@ DELEGATE_RETRIEVAL_K = int(os.getenv("DELEGATE_RETRIEVAL_K", "6"))
 DELEGATE_RERANK_INITIAL_K = int(os.getenv("DELEGATE_RERANK_INITIAL_K", "20"))
 DELEGATE_MAX_HISTORY_TURNS = int(os.getenv("DELEGATE_MAX_HISTORY_TURNS", "8"))
 
+
+# API usage: structured logs plus background persistence in the existing WCA database.
+API_USAGE_ENABLED = os.getenv("API_USAGE_ENABLED", "true").lower() != "false"
+API_USAGE_PERSIST = os.getenv("API_USAGE_PERSIST", "true").lower() != "false"

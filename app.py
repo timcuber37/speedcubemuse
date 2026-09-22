@@ -25,6 +25,7 @@ from services.auth import get_user_from_token, find_or_create_wca_user, generate
 from services.rag import DelegateRAGService
 from services.site_meta import get_site_meta
 from services import saved_queries
+from services.api_usage import usage_source
 from extensions import limiter
 from blueprints.game import game_bp
 
@@ -145,6 +146,7 @@ def delegate():
 
 @app.route('/query', methods=['POST'])
 @limiter.limit("10 per minute")
+@usage_source("web")
 def query():
     data = request.get_json()
     if not data or not isinstance(data, dict):
@@ -208,6 +210,7 @@ def _is_delegate_authenticated() -> bool:
 @app.route('/api/delegate/ask', methods=['POST'])
 @limiter.limit("5 per minute")
 @limiter.limit("10 per day", exempt_when=_is_delegate_authenticated)
+@usage_source("web")
 def delegate_ask():
     if not delegate_service.is_ready():
         return jsonify({'error': 'Ask a Delegate is unavailable right now. Please try again later.'}), 503

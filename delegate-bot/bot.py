@@ -19,6 +19,7 @@ from delegate import UserCooldown, build_answer_embed, build_history
 from services.nl_to_sql import NLToSQLService
 from services.rag import DelegateRAGService
 from services.wca_api import WCAService
+from services.api_usage import usage_source
 
 logging.basicConfig(
     level=logging.INFO,
@@ -90,6 +91,7 @@ async def on_command_error(ctx, error):
 @bot.tree.command(name="delegate", description="Ask a question about the WCA Regulations & Guidelines")
 @app_commands.describe(question="Your question about the WCA Regulations or Guidelines")
 @app_commands.checks.cooldown(5, 60.0, key=lambda i: i.user.id)
+@usage_source("discord")
 async def delegate(interaction: discord.Interaction, question: app_commands.Range[str, 5, 1000]):
     logger.info(f"/delegate invoked by {interaction.user} with question: {question[:80]}")
     await interaction.response.defer(thinking=True)
@@ -133,6 +135,7 @@ async def on_app_command_error(interaction: discord.Interaction,
         pass
 
 
+@usage_source("discord")
 async def handle_thread_followup(message: discord.Message):
     """Answer a follow-up question in a bot-owned /delegate thread."""
     question = message.content.strip()
@@ -162,6 +165,7 @@ async def handle_thread_followup(message: discord.Message):
 @bot.hybrid_command(name='query', aliases=['q', 'ask'],
                     description='Ask about WCA competitors, records, and results')
 @app_commands.describe(question='Your question about WCA competition results')
+@usage_source("discord")
 async def query_wca(ctx, *, question: str):
     """
     Query WCA statistics using natural language.

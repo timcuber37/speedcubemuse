@@ -26,6 +26,7 @@ load_dotenv()
 from config import (REGULATIONS_REF, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL,
                     VOYAGE_API_KEY, VOYAGE_EMBED_MODEL)
 from services.auth import get_supabase_admin
+from services.api_usage import APICall, usage_source
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
 log = logging.getLogger(__name__)
@@ -151,7 +152,9 @@ def embed_texts(client: voyageai.Client, texts: list[str]) -> list[list[float]]:
     """Embed a batch with retry-on-rate-limit (handles free-tier 3 RPM / 10K TPM)."""
     for attempt in range(MAX_EMBED_RETRIES):
         try:
-            result = client.embed(texts, model=VOYAGE_EMBED_MODEL, input_type='document')
+            with APICall('regulations.embed', 'voyage', VOYAGE_EMBED_MODEL) as call:
+                result = call.capture(client.embed(
+                    texts, model=VOYAGE_EMBED_MODEL, input_type='document'))
             return result.embeddings
         except voyageai.error.RateLimitError as e:
             wait = min(25 + attempt * 15, 90)  # 25s, 40s, 55s, ...
@@ -217,6 +220,7 @@ def upsert_chunks(chunks: list[dict]) -> None:
         ).execute()
 
 
+@usage_source("maintenance")
 def main():
     text = fetch_regulations()
     chunks = parse_chunks(text)

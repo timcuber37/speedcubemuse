@@ -52,9 +52,9 @@ for _key, _targets in _IMPLIES.items():
 _implies_closure = lambda key: _closure(key, _IMPLIES)        # noqa: E731
 _implied_by_closure = lambda key: _closure(key, _IMPLIED_BY)  # noqa: E731
 
-# Candidates sampled when scoring questions on a large pool. 3,000 keeps the
-# estimate tight while bounding a turn to a few hundred thousand predicate
-# evaluations (~35 ms) no matter how big the pool gets.
+# Candidates sampled when scoring questions on a large pool. Keep the existing
+# sample size for accuracy; scoring groups their probability by attribute value
+# so repeated values do not need a predicate evaluation for every candidate.
 SAMPLE_SIZE = 3000
 
 # P(player gives this answer | the attribute is actually True / False).
@@ -310,22 +310,17 @@ class Engine:
         mass = sum(weights)
         if mass <= 0:
             return None
-        norm = [w / mass for w in weights]
-        base = _entropy(norm)
+        weighted_attrs = [(self._attrs[i], w / mass) for i, w in zip(pool, weights)]
+        by_value: dict[str, list[tuple[dict, float]]] = {}
 
         best: tuple[float, str] | None = None
-        attrs = self._attrs
-
         for pred_id, pred in self._by_id.items():
             if pred_id in asked:
                 continue
-            hits = [pred.test(attrs[i]) for i in pool]
-            # A predicate that splits nothing carries no information.
-            first = hits[0]
-            if all(h == first for h in hits):
-                continue
-
-            gain = base - self._expected_entropy(norm, hits)
+            if pred.key not in by_value:
+                by_value[pred.key] = self._group_weights(weighted_attrs, pred.key)
+            true_mass = sum(w for attrs, w in by_value[pred.key] if pred.test(attrs))
+            gain = self._information_gain(true_mass)
             if best is None or gain > best[0]:
                 best = (gain, pred_id)
 
@@ -337,22 +332,48 @@ class Engine:
         return self._by_id[best[1]]
 
     @staticmethod
-    def _expected_entropy(norm: list[float], hits: list[bool]) -> float:
-        """Entropy after this question, averaged over the answers we might get.
+    def _group_weights(weighted_attrs: list[tuple[dict, float]],
+                       key: str) -> list[tuple[dict, float]]:
+        """Group this turn's sample, never build a full-pool predicate index.
 
-        Only the crisp yes/no branches are modelled here. The soft answers are
-        mixtures of the same two and don't change which question ranks highest,
-        so including them would cost time without changing the choice.
+        A predicate reads only its own attribute. Testing each distinct value
+        with its combined weight gives exactly the same matching probability.
+        This especially helps countries, thresholds, and event-group questions.
         """
-        total = 0.0
-        for answer in ('yes', 'no'):
-            lik = LIKELIHOOD[answer]
-            weights = [w * lik[h] for w, h in zip(norm, hits)]
-            mass = sum(weights)
-            if mass <= 0:
-                continue
-            total += mass * _entropy(w / mass for w in weights)
-        return total
+        masses: dict[object, float] = {}
+        for attrs, weight in weighted_attrs:
+            value = attrs.get(key)
+            if value is None:
+                continue  # Predicate.test treats missing values as False.
+            if isinstance(value, (list, set)):
+                value = tuple(value)
+            try:
+                masses[value] = masses.get(value, 0.0) + weight
+            except TypeError:
+                # Unexpected nested data can still be evaluated by Predicate;
+                # skip grouping rather than changing its handling of that data.
+                return weighted_attrs
+        return [({key: value}, weight) for value, weight in masses.items()]
+
+    @staticmethod
+    def _information_gain(true_mass: float) -> float:
+        """Exact yes/no information gain using the two partition masses.
+
+        I(candidate; answer) = H(answer) - H(answer | candidate). The latter
+        depends only on whether the candidate matches, so we need no per-row
+        posterior entropies. This preserves the old noisy yes/no model while
+        replacing thousands of logarithms per question with six.
+        """
+        true_mass = min(1.0, max(0.0, true_mass))  # Roundoff in normalized sums.
+        if true_mass == 0.0 or true_mass == 1.0:
+            return 0.0
+        false_mass = 1.0 - true_mass
+        yes, no = LIKELIHOOD['yes'], LIKELIHOOD['no']
+        answer_entropy = _entropy((true_mass * yes[True] + false_mass * yes[False],
+                                   true_mass * no[True] + false_mass * no[False]))
+        return (answer_entropy
+                - true_mass * _entropy((yes[True], no[True]))
+                - false_mass * _entropy((yes[False], no[False])))
 
     def _live(self, belief: list[float]) -> list[int]:
         """Indices still carrying meaningful probability mass."""

@@ -3,6 +3,7 @@ import json
 import logging
 import re
 from anthropic import AsyncAnthropic
+from services.api_usage import APICall
 from config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL, QUERY_MODELS
 
 logger = logging.getLogger(__name__)
@@ -205,7 +206,8 @@ If the question cannot be answered with SQL against this schema, set "sql" to nu
             return QUERY_MODELS[model_key]
         return self.model
 
-    async def _create_message(self, model_id: str, max_tokens: int, system, messages: list, output_config: dict = None):
+    async def _create_message(self, model_id: str, max_tokens: int, system, messages: list,
+                              output_config: dict = None, operation: str = "stats.generate_sql"):
         """Call the Anthropic API asynchronously."""
         kwargs = {
             "model": model_id,
@@ -218,15 +220,12 @@ If the question cannot be answered with SQL against this schema, set "sql" to nu
         }
         if output_config:
             kwargs["output_config"] = output_config
-        response = await self.client.messages.create(**kwargs)
-        usage = response.usage
-        logger.info(
-            f"NL-to-SQL model: requested={model_id}, served={response.model}, "
-            f"cache_read={usage.cache_read_input_tokens}, cache_write={usage.cache_creation_input_tokens}"
-        )
+        with APICall(operation, 'anthropic', model_id) as call:
+            response = call.capture(await self.client.messages.create(**kwargs))
         return response
 
-    async def _generate_sql(self, user_content: str, model: str = None) -> str:
+    async def _generate_sql(self, user_content: str, model: str = None,
+                            operation: str = "stats.generate_sql") -> str:
         """Run one structured-output SQL generation call; returns validated SQL or None."""
         response = await self._create_message(
             self._resolve_model(model),
@@ -240,6 +239,7 @@ If the question cannot be answered with SQL against this schema, set "sql" to nu
             }],
             messages=[{"role": "user", "content": user_content}],
             output_config={"format": _SQL_OUTPUT_FORMAT},
+            operation=operation,
         )
 
         text = next(b.text for b in response.content if b.type == "text")
@@ -296,6 +296,7 @@ Database error:
 
 Generate a corrected SQL query that answers the question.""",
                 model=model,
+                operation="stats.repair_sql",
             )
         except Exception as e:
             logger.error(f"Error repairing SQL: {e}")
@@ -349,6 +350,7 @@ Generate a corrected SQL query that answers the question.""",
             response = await self._create_message(
                 self._resolve_model(model),
                 max_tokens=150,
+                operation="stats.summarize",
                 system="You are a helpful assistant summarizing WCA competition database query results. Write 1-2 sentences directly answering the user's question based on the data. Be concise and specific — include key names, numbers, or times from the results. Use everyday language and briefly explain unfamiliar abbreviations. Do not mention SQL.",
                 messages=[{
                     "role": "user",

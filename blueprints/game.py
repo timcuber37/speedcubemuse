@@ -15,6 +15,8 @@ its secret in a Fernet-sealed token the browser carries — see tokens.py for wh
 a Flask session cookie is not sufficient.
 """
 import logging
+import time
+from contextlib import contextmanager
 
 from flask import Blueprint, jsonify, render_template, request
 
@@ -23,6 +25,7 @@ from config import (GAME_LIMIT_ASK, GAME_LIMIT_CHEAP, GAME_LIMIT_FREE,
                     SUPABASE_ANON_KEY, SUPABASE_URL)
 from extensions import limiter
 from services.auth import get_user_from_token
+from services.api_usage import usage_source
 from services.game import fame_index, profiles, pvp, tokens
 from services.game.attributes import (EVENT_TIER_WEIGHT, EVENT_TIERS,
                                       country_label, event_label,
@@ -177,6 +180,21 @@ def game_pvp():
 # Mode 2 — the app guesses. Zero model calls.
 # ---------------------------------------------------------------------------
 
+@contextmanager
+def _time_turn_stage(stage, difficulty, candidates=0, answers=0):
+    """Log even on a worker abort, separating CPU work from elapsed time."""
+    started, cpu_started = time.perf_counter(), time.process_time()
+    try:
+        yield
+    finally:
+        logger.info(
+            'akinator stage=%s difficulty=%s candidates=%d answers=%d wall_ms=%.1f cpu_ms=%.1f',
+            stage, difficulty, candidates, answers,
+            (time.perf_counter() - started) * 1000,
+            (time.process_time() - cpu_started) * 1000,
+        )
+
+
 @game_bp.route('/api/game/akinator/turn', methods=['POST'])
 @_limit(GAME_LIMIT_FREE)
 def akinator_turn():
@@ -188,7 +206,8 @@ def akinator_turn():
     payload = request.get_json(silent=True) or {}
     difficulty = _difficulty(payload)
 
-    engine, error = _engine_or_error(difficulty)
+    with _time_turn_stage('load', difficulty):
+        engine, error = _engine_or_error(difficulty)
     if error:
         return error
 
@@ -198,7 +217,8 @@ def akinator_turn():
     rejected = [str(x) for x in (payload.get('rejected') or [])][:MAX_REJECTED]
 
     answers = decode_log(raw_log)
-    belief = engine.replay(answers, rejected)
+    with _time_turn_stage('replay', difficulty, len(engine.rows), len(answers)):
+        belief = engine.replay(answers, rejected)
 
     if engine.should_guess(belief, answers):
         return jsonify(_guess_response(engine, belief, len(answers)))
@@ -206,7 +226,8 @@ def akinator_turn():
     # The engine excludes questions the log already settles — see
     # Engine.implied(). It takes the log rather than an asked-set precisely so
     # that exclusion can't be confused with the question count above.
-    pred = engine.pick_question(belief, answers)
+    with _time_turn_stage('pick', difficulty, len(engine.rows), len(answers)):
+        pred = engine.pick_question(belief, answers)
     if pred is None:
         # No question left that separates anyone — guessing is all that remains.
         return jsonify(_guess_response(engine, belief, len(answers)))
@@ -274,6 +295,7 @@ def solo_start():
 @game_bp.route('/api/game/solo/ask', methods=['POST'])
 @_limit(GAME_LIMIT_ASK)
 @_limit(f"{MAX_GUEST_GAME_QUESTIONS} per day", exempt_when=_is_authenticated)
+@usage_source("web")
 def solo_ask():
     """Answer one free-text question about the sealed secret cuber."""
     payload = request.get_json(silent=True) or {}
@@ -409,6 +431,7 @@ def pvp_state(match_id):
 @game_bp.route('/api/game/pvp/<match_id>/ask', methods=['POST'])
 @_limit(GAME_LIMIT_ASK)
 @_limit(f"{MAX_GUEST_GAME_QUESTIONS} per day", exempt_when=_is_authenticated)
+@usage_source("web")
 def pvp_ask(match_id):
     user, error = _pvp_user()
     if error:

@@ -75,4 +75,5 @@ test_integration.py
 PRD.md
 DATABASE_SETUP.md
 
-docs/
+docs/*
+!docs/api-usage.md
