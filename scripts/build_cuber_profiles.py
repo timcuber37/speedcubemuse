@@ -23,6 +23,7 @@ import logging
 import math
 import ssl
 import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -36,6 +37,7 @@ sys.path.insert(0, str(_HERE.parent))
 load_dotenv()
 
 from config import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, DB_SSL  # noqa: E402
+from services import site_meta  # noqa: E402
 from services.game.attributes import (ATTRIBUTES, EVENT_GROUPS,  # noqa: E402
                                       event_weight, group_of)
 
@@ -616,7 +618,11 @@ def assign_tiers(profiles: list[dict]) -> None:
 def write_profiles(conn, profiles: list[dict]) -> None:
     cur = conn.cursor()
     cur.execute(CREATE_PROFILES_SQL)
-    cur.execute('DELETE FROM `cuber_profiles`')
+    # TRUNCATE rather than DELETE: DELETE is billed as a write for each of the
+    # ~297k rows and their index entries, while TRUNCATE swaps in an empty
+    # table for almost nothing. The connection is autocommit, so DELETE gave
+    # no atomicity that TRUNCATE gives up.
+    cur.execute('TRUNCATE TABLE `cuber_profiles`')
 
     sql = ('INSERT INTO `cuber_profiles` '
            '(wca_id, name, country_id, continent_id, fame, tier, attrs) '
@@ -725,6 +731,7 @@ def run(dry_run: bool = False) -> None:
             log.info('--dry-run: nothing written')
         else:
             write_profiles(conn, profiles)
+            site_meta.publish_game_profiles_generation(conn, uuid.uuid4().hex)
 
         cur.execute(f'DROP TABLE IF EXISTS `{POOL_TABLE}`')
         cur.close()

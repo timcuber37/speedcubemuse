@@ -24,6 +24,7 @@ from config import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, DB_SSL
 logger = logging.getLogger(__name__)
 
 META_KEY = 'db_stats'
+GAME_PROFILES_KEY = 'game_profiles_generation'
 
 # Order the stat cards appear in on the About page.
 STAT_ORDER = ['Competitors', 'Results', 'Competitions', 'Events']
@@ -109,6 +110,21 @@ def write_meta(conn, stats: dict, export_date: str) -> None:
     )
     conn.commit()
     cur.close()
+
+
+def publish_game_profiles_generation(conn, generation: str) -> None:
+    """Publish a completed game matrix so web workers can skip unchanged loads."""
+    ensure_table(conn)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            'INSERT INTO `site_meta` (`key`, `value`) VALUES (%s, %s) '
+            'ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)',
+            (GAME_PROFILES_KEY, generation),
+        )
+        conn.commit()
+    finally:
+        cur.close()
 
 
 # ---------------------------------------------------------------------------

@@ -1,12 +1,14 @@
-name: Weekly WCA database refresh
+name: Monthly WCA database refresh
 
 on:
   schedule:
-    # Mondays 09:00 UTC. The WCA publishes a new export roughly weekly
-    # (Sunday/Monday); if there isn't a newer one the script exits early.
+    # 1st of each month, 09:00 UTC. The WCA publishes a new export roughly
+    # weekly, but reloading monthly keeps TiDB request-unit usage down; each
+    # run picks up whatever the latest export is, and if there isn't a newer
+    # one the script exits early.
     # GitHub may delay scheduled runs under load, and disables schedules
     # entirely after 60 days with no repo activity.
-    - cron: '0 9 * * 1'
+    - cron: '0 9 1 * *'
   workflow_dispatch:
     inputs:
       force:
@@ -41,7 +43,7 @@ jobs:
 
       # Deliberately not requirements.txt: the reload only needs a database
       # driver and an HTTP client. Installing the app's full dependency set
-      # would let an unrelated package break the weekly refresh.
+      # would let an unrelated package break the monthly refresh.
       - name: Install dependencies
         run: pip install PyMySQL cryptography requests certifi python-dotenv
 
@@ -64,4 +66,4 @@ jobs:
           curl -sS -X POST "$DISCORD_WEBHOOK_URL" \
             -H 'Content-Type: application/json' \
             --data "$(jq -n --arg url "$run_url" \
-              '{content: ("⚠️ SpeedCubeMuse weekly database refresh failed: " + $url)}')"
+              '{content: ("⚠️ SpeedCubeMuse monthly database refresh failed: " + $url)}')"

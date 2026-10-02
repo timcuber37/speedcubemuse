@@ -166,7 +166,7 @@
         if (q.length < 2) return hide('suggestions');
         // Debounced: the endpoint reads an in-process cache, but there is no
         // reason to hit it on every keystroke.
-        searchTimer = setTimeout(() => runSearch(q), 180);
+        searchTimer = setTimeout(() => runSearch(q), 300);
     });
 
     async function runSearch(q) {

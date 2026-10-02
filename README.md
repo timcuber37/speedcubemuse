@@ -27,7 +27,7 @@ The app queries a database populated from the official [WCA data export](https:/
 | Competitions | 18,280 |
 | Events | 17 |
 
-The database is refreshed automatically every Monday by the `Weekly WCA database refresh` GitHub Action, which runs `scripts/update_database.py` to download the latest WCA export and reload all tables. The script records the export date and row counts in a `site_meta` table that the home and About pages read at render time, so a refresh reaches the site with no commit or redeploy.
+The database is refreshed automatically on the 1st of each month by the `Monthly WCA database refresh` GitHub Action, which runs `scripts/update_database.py` to download the latest WCA export and reload all tables. The script records the export date and row counts in a `site_meta` table that the home and About pages read at render time, so a refresh reaches the site with no commit or redeploy.
 
 ## Tech Stack
 
@@ -59,7 +59,7 @@ engine** — Akinator is an information-gain search over a feature matrix, not a
 language model, and this works the same way.
 
 `scripts/build_cuber_profiles.py` precomputes ~37 attributes for **every WCA
-competitor** into a `cuber_profiles` table during the weekly refresh — all
+competitor** into a `cuber_profiles` table during the monthly refresh — all
 ~297,000 of them. A `fame` score (records, World Championship podiums, recency,
 result volume) ranks the ~2,100 who have held a continental record or better or
 sit in a current world top 100, and those form the first three tiers.
@@ -122,6 +122,18 @@ not reproduce the Fly timeout or measure production latency. The turn endpoint
 logs `akinator stage=load`, `stage=replay`, and `stage=pick` with elapsed and CPU
 milliseconds, including on a worker abort, to distinguish slow loading from
 scoring and help investigate CPU contention.
+
+Each worker checks a small generation marker hourly and reuses its loaded
+competitor pools until the monthly profile rebuild publishes a new generation.
+A full read every 30 days recovers from an update that missed the marker. A larger
+cached pool also serves smaller difficulties. Solo games on Everyone use a
+compact ID/name directory to draw a random competitor and serve name searches;
+the selected competitor's indexed row is fetched and cached. Failed or
+empty reads keep any previously loaded snapshot and retry after 15 seconds.
+A newly started worker still needs a working database. If logs show MySQL error
+1105 with "usage quota being exhausted", check the TiDB cluster's usage and
+spending limit: database access must be restored before a cold worker can load
+the game.
 
 Measured by self-play:
 
@@ -323,7 +335,7 @@ wca_statbot/
 ├── .github/
 │   └── workflows/
 │       ├── deploy.yml            # CI/CD (deploys website and bot together on push)
-│       └── update-database.yml   # Weekly WCA export refresh (Mondays 09:00 UTC)
+│       └── update-database.yml   # Monthly WCA export refresh (1st of month, 09:00 UTC)
 ├── Dockerfile              # Shared image for website and bot
 ├── fly.toml                # speedcubemuse app: website and bot process groups
 ├── requirements.txt        # Python dependencies
@@ -356,7 +368,7 @@ Create a `.env` file:
 ```env
 # Anthropic
 ANTHROPIC_API_KEY=your_key_here
-ANTHROPIC_MODEL=claude-sonnet-5
+ANTHROPIC_MODEL=claude-sonnet-5   # Ask a Delegate; queries use QUERY_MODELS in config.py
 
 # Voyage AI (Ask a Delegate RAG)
 VOYAGE_API_KEY=your_key_here
@@ -434,7 +446,7 @@ to sync commands to a specific test server; leave it unset for global commands.
 
 ### Update the database
 
-Runs weekly on its own (see [Deployment](#deployment)); these are for running it by hand:
+Runs monthly on its own (see [Deployment](#deployment)); these are for running it by hand:
 
 ```bash
 python scripts/update_database.py                 # skip if already up to date
@@ -570,10 +582,10 @@ fly secrets set -a speedcubemuse \
 Leave `DISCORD_GUILD_ID` unset in production so slash commands sync globally.
 Existing secrets stay in place; only supply values you need to add or change.
 
-### Weekly database refresh
+### Monthly database refresh
 
-`.github/workflows/update-database.yml` reloads the WCA export every Monday at
-09:00 UTC (also runnable on demand from the Actions tab, with an optional
+`.github/workflows/update-database.yml` reloads the WCA export on the 1st of
+each month at 09:00 UTC (also runnable on demand from the Actions tab, with an optional
 `force` input). It writes only to TiDB — no commit, no redeploy — because the
 site reads its stats from the `site_meta` table at render time.
 

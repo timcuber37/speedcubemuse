@@ -5,10 +5,8 @@ route for the rest of the site.
 
 Every endpoint here is stateless between turns. The client holds the answer log
 and replays it on each request; the server rebuilds the belief from scratch.
-That is not a stylistic choice — the web app runs two Gunicorn workers with no
-sticky sessions and the Fly machine suspends when idle, so anything kept in
-process memory would vanish or be invisible to the next request. The same
-reason Flask-Limiter's in-memory counters reset on suspend.
+That is necessary because the web app runs two Gunicorn workers with no sticky
+sessions, and worker replacements discard process memory.
 
 Mode 2 needs no secret at all (the cuber is in the player's head). Mode 1 keeps
 its secret in a Fernet-sealed token the browser carries — see tokens.py for why
@@ -283,11 +281,9 @@ def solo_start():
 
     logger.info('solo game started (%s): %s', difficulty, secret['wca_id'])
 
-    engine = profiles.get_engine(difficulty)
     return jsonify({
         'token': tokens.seal({'wca_id': secret['wca_id'], 'difficulty': difficulty}),
         'difficulty': difficulty,
-        'pool_size': len(engine.rows) if engine else None,
         'max_questions': MAX_QUESTIONS,
     })
 

@@ -4,7 +4,7 @@ import logging
 import re
 from anthropic import AsyncAnthropic
 from services.api_usage import APICall
-from config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL, QUERY_MODELS
+from config import ANTHROPIC_API_KEY, DEFAULT_QUERY_MODEL, QUERY_MODELS
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +50,6 @@ class NLToSQLService:
             # Async client — the sync client blocks the event loop for the
             # duration of each API call (freezes the Discord bot for all users).
             self.client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
-
-        self.model = ANTHROPIC_MODEL
 
         # WCA database schema information for the AI
         self.schema_context = """
@@ -199,29 +197,35 @@ If the question cannot be answered with SQL against this schema, set "sql" to nu
     def _resolve_model(self, model_key: str) -> str:
         """Map a user-supplied model key to an allowed model ID.
 
-        Falls back to the configured default model for unknown or missing keys,
+        Falls back to the default query model for unknown or missing keys,
         so callers can never request an arbitrary model string.
         """
-        if model_key and model_key in QUERY_MODELS:
-            return QUERY_MODELS[model_key]
-        return self.model
+        return QUERY_MODELS.get(model_key, QUERY_MODELS[DEFAULT_QUERY_MODEL])
 
     async def _create_message(self, model_id: str, max_tokens: int, system, messages: list,
                               output_config: dict = None, operation: str = "stats.generate_sql"):
         """Call the Anthropic API asynchronously."""
-        kwargs = {
-            "model": model_id,
-            "max_tokens": max_tokens,
-            "system": system,
-            "messages": messages,
-            # Sonnet 5 runs adaptive thinking when this field is omitted, and
-            # thinking tokens count against max_tokens — keep it off for latency.
-            "thinking": {"type": "disabled"},
-        }
-        if output_config:
-            kwargs["output_config"] = output_config
         with APICall(operation, 'anthropic', model_id) as call:
-            response = call.capture(await self.client.messages.create(**kwargs))
+            response = call.capture(await self.client.beta.messages.create(
+                model=model_id,
+                max_tokens=max_tokens,
+                system=system,
+                messages=messages,
+                # Sonnet 5.5 runs adaptive thinking when this field is omitted,
+                # and thinking tokens count against the small max_tokens here.
+                # It rejects {"type": "disabled"}; between_tools is its lowest
+                # setting and requires effort "high" or below.
+                thinking={"type": "between_tools"},
+                output_config={"effort": "high", **(output_config or {})},
+                # On a cyber or frontier-LLM refusal, the API retries the request
+                # on Claude Sonnet 5 within the same call. The installed SDK only
+                # types the older list form of `fallbacks`, so send it raw.
+                betas=["server-side-fallback-2026-07-01"],
+                extra_body={"fallbacks": "default"},
+            ))
+        if response.stop_reason == "refusal":
+            category = getattr(response.stop_details, "category", None)
+            logger.warning(f"{operation} declined by the model (category: {category})")
         return response
 
     async def _generate_sql(self, user_content: str, model: str = None,
@@ -241,6 +245,8 @@ If the question cannot be answered with SQL against this schema, set "sql" to nu
             output_config={"format": _SQL_OUTPUT_FORMAT},
             operation=operation,
         )
+        if response.stop_reason == "refusal":
+            return None
 
         text = next(b.text for b in response.content if b.type == "text")
         data = json.loads(text)
@@ -263,8 +269,8 @@ If the question cannot be answered with SQL against this schema, set "sql" to nu
 
         Args:
             question: The user's question in natural language
-            model: Optional model key ("opus", "sonnet", "haiku"); falls back
-                to the configured default when missing or unrecognized.
+            model: Optional model key (see config.QUERY_MODELS); falls back
+                to the default query model when missing or unrecognized.
 
         Returns:
             SQL query string, or None if translation fails
@@ -310,7 +316,7 @@ Generate a corrected SQL query that answers the question.""",
             question: The user's question in natural language
             execute: Async callable that runs a SQL string and returns result rows
                 (execute_query's error shape [{"error": ..., "message": ...}] on failure)
-            model: Optional model key ("opus", "sonnet", "haiku")
+            model: Optional model key (see config.QUERY_MODELS)
 
         Returns:
             (sql_query, results) — sql_query is None when translation fails,
@@ -357,6 +363,8 @@ Generate a corrected SQL query that answers the question.""",
                     "content": f"Question: {question}\n\nResults:\n{rows_text}"
                 }]
             )
+            if response.stop_reason == "refusal":
+                return None
             return next(b.text for b in response.content if b.type == "text").strip()
         except Exception as e:
             logger.warning(f"Summary generation failed: {e}")

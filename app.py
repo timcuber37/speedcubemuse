@@ -18,7 +18,7 @@ if sys.platform == 'win32':
 
 from config import (MAX_QUERY_RESULTS, SUPABASE_URL, SUPABASE_ANON_KEY,
                     WCA_CLIENT_ID, WCA_CLIENT_SECRET, WCA_REDIRECT_URI, SECRET_KEY,
-                    QUERY_MODELS, DEFAULT_QUERY_MODEL, MAX_GUEST_GAME_QUESTIONS)
+                    MAX_GUEST_GAME_QUESTIONS)
 from services.nl_to_sql import NLToSQLService
 from services.wca_api import WCAService
 from services.auth import get_user_from_token, find_or_create_wca_user, generate_wca_login_link
@@ -40,9 +40,6 @@ app = Flask(__name__)
 app.secret_key = SECRET_KEY or secrets.token_hex(32)
 
 MAX_QUESTION_LENGTH = 2000
-
-# Models that guests (signed-out users) may use. Opus and Sonnet require sign-in.
-GUEST_QUERY_MODELS = {'haiku'}
 
 limiter.init_app(app)
 
@@ -167,13 +164,6 @@ def query():
     model = data.get('model')
     if model is not None and not isinstance(model, str):
         return jsonify({'error': 'Please choose an answer mode and try again.'}), 400
-
-    # Opus and Sonnet are restricted to signed-in users; guests get Haiku only.
-    effective_model = model if model in QUERY_MODELS else DEFAULT_QUERY_MODEL
-    if effective_model not in GUEST_QUERY_MODELS:
-        user, _ = get_current_user()
-        if user is None:
-            return jsonify({'error': 'Sign in to use Balanced or Complex questions mode, or choose Quick to continue as a guest.'}), 403
 
     try:
         # Translates, executes, and retries once with the DB error on failure.

@@ -8,17 +8,17 @@ load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 DISCORD_GUILD_ID = os.getenv("DISCORD_GUILD_ID")  # Optional: for testing in specific server
 
-# Anthropic Configuration (for NL-to-SQL translation)
+# Anthropic Configuration
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")  # default model for NL-to-SQL
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")  # Ask a Delegate answers
 
-# User-selectable models for the main query feature.
-# Keys are the values the frontend sends; values are the Anthropic model IDs.
-# All three must support structured outputs (used by NLToSQLService).
+# Models for the main query feature (NL-to-SQL). Keys are the values a client
+# may send; unknown or missing keys fall back to DEFAULT_QUERY_MODEL, so older
+# pages that still send "haiku" or "opus" get Sonnet 5.5. Every entry must
+# support structured outputs and `between_tools` thinking (used by
+# NLToSQLService), and `between_tools` is accepted only by Sonnet 5.5.
 QUERY_MODELS = {
-    "opus": "claude-opus-4-8",
-    "sonnet": "claude-sonnet-5",
-    "haiku": "claude-haiku-4-5",
+    "sonnet": "claude-sonnet-5-5",
 }
 DEFAULT_QUERY_MODEL = "sonnet"
 

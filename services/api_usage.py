@@ -26,9 +26,10 @@ from config import (API_USAGE_ENABLED, API_USAGE_PERSIST, DB_HOST, DB_NAME,
                     DB_PASSWORD, DB_PORT, DB_SSL, DB_USER)
 
 logger = logging.getLogger(__name__)
-PRICING_VERSION = '2026-09-22'
+PRICING_VERSION = '2026-10-01'
 # USD per million tokens. Sources and limitations: docs/api-usage.md.
 ANTHROPIC_PRICES = {
+    'claude-sonnet-5-5': ('2', '10'),
     'claude-sonnet-5': ('2', '10'),
     'claude-opus-4-8': ('5', '25'),
     'claude-haiku-4-5': ('1', '5'),

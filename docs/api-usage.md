@@ -93,12 +93,12 @@ period and API keys. Anthropic's
 also provides organization reports with suitable admin credentials. None are
 required for the app's own metering.
 
-Public standard API rates checked on **2026-09-22**, in USD per million tokens:
+Public standard API rates checked on **2026-10-01**, in USD per million tokens:
 
 | Model used by this app | Input | Output | 5m cache write | 1h cache write | Cache read |
 |---|---:|---:|---:|---:|---:|
+| Claude Sonnet 5.5 | 2 | 10 | 2.50 | 4 | 0.20 |
 | Claude Sonnet 5 | 2 | 10 | 2.50 | 4 | 0.20 |
-| Claude Opus 4.8 | 5 | 25 | 6.25 | 10 | 0.50 |
 | Claude Haiku 4.5 | 1 | 5 | 1.25 | 2 | 0.10 |
 | Voyage `voyage-3-large` | 0.18 | — | — | — | — |
 | Voyage `rerank-2-lite` | 0.02 | — | — | — | — |
@@ -122,7 +122,7 @@ week before deciding which feature to optimize first.
 |---|---|---|
 | `stats.generate_sql` | Every stats question, web or Discord | Schema prompt plus SQL output. Cache validated SQL for repeated questions, keyed by model and schema version, then execute it against current data. |
 | `stats.repair_sql` | Once after a database execution error | Another generation with the failed SQL and error. Measure repair frequency and fix recurring schema/prompt issues. |
-| `stats.summarize` | Web queries with successful, nonempty results | A separate call using the chosen SQL model, including Opus. Evaluate Haiku for this short step or template common answer shapes. |
+| `stats.summarize` | Web queries with successful, nonempty results | A separate call on the SQL model (Sonnet 5.5). Evaluate Haiku for this short step or template common answer shapes. |
 | `delegate.answer` | Every Delegate question | Retrieved regulations, expanded parents/guidelines, history, and output. Evaluate thinking disabled for simple questions; enforce a source-token budget while preserving required citations. |
 | `delegate.rewrite` | Delegate questions with history | Haiku sees history again before the main answer. Evaluate using only the context needed to resolve a follow-up. |
 | `delegate.embed` | Every Delegate question | One Voyage query embedding. Cache embeddings/retrieval results by query, model, and regulations revision. |
@@ -134,8 +134,8 @@ The app's automatic guessing, candidate scoring, and name search make no paid
 model calls. Database/hosting costs are outside this report.
 
 Prompt caching deserves verification: both SQL and game prompts request it, but
-Haiku 4.5 requires at least **4,096** tokens in the cached prefix, whereas Sonnet
-5 and Opus 4.8 require **1,024**. A short prefix silently runs uncached. Check the
+Haiku 4.5 (the game) requires at least **4,096** tokens in the cached prefix,
+whereas Sonnet 5.5 (SQL) requires **512**. A short prefix silently runs uncached. Check the
 actual token and cache-write/read counts instead of relying on source comments.
 Changing Delegate sources also prevents reuse of an identical cached prefix;
 move stable instructions first if adding caching, then validate its economics.

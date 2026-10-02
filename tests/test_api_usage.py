@@ -17,11 +17,13 @@ from services import api_usage as usage
 from scripts import usage_report as report
 
 
-def response(model='claude-sonnet-5', text='{"sql":"SELECT 1","error":null}', **tokens):
+def response(model='claude-sonnet-5', text='{"sql":"SELECT 1","error":null}',
+             stop_reason='end_turn', **tokens):
     counts = {'input_tokens': 1000, 'output_tokens': 100,
               'cache_read_input_tokens': 0, 'cache_creation_input_tokens': 0, **tokens}
     return SimpleNamespace(model=model, usage=SimpleNamespace(**counts),
                            content=[SimpleNamespace(type='text', text=text)],
+                           stop_reason=stop_reason, stop_details=None,
                            _request_id='req_test')
 
 
@@ -125,10 +127,11 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_sql_generation_repair_summary_are_attributed_separately(self):
         from services.nl_to_sql import NLToSQLService
         service = NLToSQLService()
-        service.client = SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(side_effect=[
-            response(text='{"sql":"SELECT bad","error":null}'),
-            response(), response(text='One result.'),
-        ])))
+        service.client = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(
+            create=AsyncMock(side_effect=[
+                response(text='{"sql":"SELECT bad","error":null}'),
+                response(), response(text='One result.'),
+            ]))))
         execute = AsyncMock(side_effect=[[{'error': True, 'message': 'unknown column'}], [{'result': 1}]])
         with usage.usage_scope('web'):
             _, results = await service.answer_question('Count results', execute, model='sonnet')
@@ -137,6 +140,35 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([e['operation'] for e in self.events],
                          ['stats.generate_sql', 'stats.repair_sql', 'stats.summarize'])
         self.assertEqual(len({e['request_id'] for e in self.events}), 1)
+
+    async def test_every_query_call_uses_sonnet_5_5_with_supported_thinking(self):
+        from services.nl_to_sql import NLToSQLService
+        service = NLToSQLService()
+        create = AsyncMock(side_effect=[
+            response(model='claude-sonnet-5-5'), response(model='claude-sonnet-5-5', text='One.')])
+        service.client = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(create=create)))
+        # Retired picker keys from cached pages, and the Discord bot's missing key.
+        await service.translate_to_sql('Count results', model='haiku')
+        await service.summarize_results('Count results', [{'result': 1}])
+        for call in create.call_args_list:
+            kwargs = call.kwargs
+            self.assertEqual(kwargs['model'], 'claude-sonnet-5-5')
+            # Sonnet 5.5 rejects {"type": "disabled"} with a 400.
+            self.assertEqual(kwargs['thinking'], {'type': 'between_tools'})
+            self.assertEqual(kwargs['output_config']['effort'], 'high')
+            self.assertEqual(kwargs['extra_body'], {'fallbacks': 'default'})
+            self.assertEqual(kwargs['betas'], ['server-side-fallback-2026-07-01'])
+        self.assertIn('format', create.call_args_list[0].kwargs['output_config'])
+
+    async def test_refused_query_returns_no_sql_or_summary(self):
+        from services.nl_to_sql import NLToSQLService
+        service = NLToSQLService()
+        refusal = response(model='claude-sonnet-5-5', stop_reason='refusal')
+        refusal.content = []
+        service.client = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(
+            create=AsyncMock(return_value=refusal))))
+        self.assertIsNone(await service.translate_to_sql('Count results'))
+        self.assertIsNone(await service.summarize_results('Count results', [{'result': 1}]))
 
     async def test_delegate_records_all_four_billable_stages_on_followup(self):
         from services.rag import DelegateRAGService

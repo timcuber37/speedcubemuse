@@ -47,15 +47,6 @@
                     </svg>
                 </button>
             </div>
-            <div class="model-select-row">
-                <label for="model-select" class="model-select-label">Answer mode</label>
-                <select id="model-select" class="model-select">
-                    <option value="haiku">Quick · Haiku</option>
-                    <option value="sonnet" data-premium="1">Balanced · Sonnet</option>
-                    <option value="opus" data-premium="1">Complex questions · Opus</option>
-                </select>
-            </div>
-            <!-- <p id="model-help" class="form-help">Start with Quick. The other options may take longer and require sign-in.</p> -->
             <!-- <p class="form-help">Need help with competition rules? <a href="/delegate">Ask a Delegate</a>.</p> -->
         </form>
 
@@ -140,7 +131,6 @@
                 authBtn.classList.remove('signed-in');
                 saveBtn.classList.add('hidden');
             }
-            updateModelOptions(!!session?.user);
         }
 
         function handleAuth() {
@@ -201,31 +191,6 @@
         const tableContainer = document.getElementById('table-container');
         const summaryEl = document.getElementById('summary');
         const submitBtn = document.getElementById('submit-btn');
-        const modelSelect = document.getElementById('model-select');
-        const premiumOptions = [...modelSelect.options].filter(o => o.dataset.premium);
-        premiumOptions.forEach(o => { o.dataset.baseLabel = o.textContent; });
-
-        // Opus and Sonnet require sign-in; lock them for guests.
-        function updateModelOptions(signedIn) {
-            premiumOptions.forEach(o => {
-                o.disabled = !signedIn;
-                o.textContent = signedIn ? o.dataset.baseLabel : `${o.dataset.baseLabel} (sign in)`;
-            });
-            if (!signedIn && modelSelect.selectedOptions[0]?.dataset.premium) {
-                modelSelect.value = 'haiku';
-            }
-        }
-
-        // Remember the user's model choice across visits
-        const savedModel = localStorage.getItem('queryModel');
-        if (savedModel && [...modelSelect.options].some(o => o.value === savedModel)) {
-            modelSelect.value = savedModel;
-        }
-        modelSelect.addEventListener('change', () => {
-            localStorage.setItem('queryModel', modelSelect.value);
-        });
-
-        updateModelOptions(!!currentUser);
 
         const GUEST_QUERY_LIMIT = 5;
 
@@ -262,7 +227,7 @@
                 const response = await fetch('/query', {
                     method: 'POST',
                     headers,
-                    body: JSON.stringify({ question, model: modelSelect.value })
+                    body: JSON.stringify({ question })
                 });
 
                 const data = await response.json();
