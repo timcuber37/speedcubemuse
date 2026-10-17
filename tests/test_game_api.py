@@ -20,8 +20,9 @@ from config import (GAME_LIMIT_ASK, GAME_LIMIT_CHEAP, GAME_LIMIT_FREE,
 from services.game import tokens
 from services.game.attributes import (Attribute, BY_KEY, EVENT_GROUPS,
                                       Predicate)
-from services.game.question_parser import (_SCHEMA_VERSION, _coerce_event_id,
-                                           _normalize)
+from services.game.question_parser import (_SCHEMA_VERSION,
+                                           _coerce_country_id,
+                                           _coerce_event_id, _normalize)
 
 
 @pytest.fixture(scope='module')
@@ -233,6 +234,36 @@ def test_main_event_display_name_is_coerced_to_an_id(parser):
 def test_main_event_rejects_an_unrecognised_event(parser):
     assert parser._to_predicate(
         {'attribute': 'main_event', 'op': 'eq', 'value': 'Rubiks Tower'}) is None
+
+
+# ---------------------------------------------------------------------------
+# Country names
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize('written,expected', [
+    # The countries whose WCA id differs from the name the WCA displays.
+    ('Republic of Korea', 'Korea'), ('South Korea', 'Korea'), ('korea', 'Korea'),
+    ('United States', 'USA'), ('usa', 'USA'),
+    ('Chinese Taipei', 'Taiwan'),
+    ('Hong Kong, China', 'Hong Kong'), ('Macau, China', 'Macau'),
+    ('North Korea', 'Democratic People_s Republic of Korea'),
+    # Ids spell an apostrophe as '_'.
+    ("Cote d'Ivoire", 'Cote d_Ivoire'),
+    ("Democratic People's Republic of Korea", 'Democratic People_s Republic of Korea'),
+    # Everything else already is its id.
+    ('Japan', 'Japan'), ('United Kingdom', 'United Kingdom'),
+])
+def test_country_names_resolve_to_wca_ids(written, expected):
+    assert _coerce_country_id(written) == expected
+
+
+def test_country_display_name_is_coerced_to_an_id(parser):
+    """country_id declares no value list, so the WCA's display name for South
+    Korea used to pass validation and then answer 'no' about every Korean."""
+    pred = parser._to_predicate(
+        {'attribute': 'country_id', 'op': 'eq', 'value': 'Republic of Korea'})
+    assert pred == Predicate('country_id', 'eq', 'Korea')
+    assert pred.render() == 'Do they represent Korea?'
 
 
 # ---------------------------------------------------------------------------

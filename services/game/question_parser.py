@@ -148,6 +148,37 @@ def _coerce_event_id(value: str) -> str | None:
             or (folded if folded in EVENT_NAMES else None))
 
 
+# The same problem for countries. A WCA country id is usually the country's
+# English name, but not always — South Korea is 'Korea' (displayed as 'Republic
+# of Korea'), and the US, Taiwan, Hong Kong and Macau differ the same way.
+# country_id declares no value list, so a display name passes validation and
+# then matches nobody: "are they from Korea?" answered no for every Korean
+# competitor. Keys are casefolded; values are WCA ids.
+_COUNTRY_ALIASES = {
+    'korea': 'Korea', 'republic of korea': 'Korea', 'south korea': 'Korea',
+    'north korea': 'Democratic People_s Republic of Korea',
+    'usa': 'USA', 'us': 'USA', 'america': 'USA', 'united states': 'USA',
+    'united states of america': 'USA',
+    'taiwan': 'Taiwan', 'chinese taipei': 'Taiwan',
+    'hong kong': 'Hong Kong', 'hong kong, china': 'Hong Kong',
+    'macau': 'Macau', 'macao': 'Macau', 'macau, china': 'Macau',
+}
+
+
+def _coerce_country_id(value: str) -> str:
+    """Resolve a country as written to its WCA id.
+
+    Anything unrecognised passes through: for nearly every country the id is
+    the name, and there is no declared list to check it against.
+    """
+    raw = (value or '').strip()
+    alias = _COUNTRY_ALIASES.get(raw.casefold())
+    if alias:
+        return alias
+    # Ids store an apostrophe as '_' — see country_label().
+    return raw.replace("'", '_').replace('’', '_')
+
+
 def _build_vocabulary() -> str:
     """Render the attribute list for the system prompt.
 
@@ -168,8 +199,8 @@ def _build_vocabulary() -> str:
             if attr.values:
                 spec = f'categorical (op: eq, values: {", ".join(attr.values)})'
             elif attr.key == 'country_id':
-                spec = ('categorical (op: eq, value: the country name as the WCA spells '
-                        'it, e.g. USA, China, Japan, Poland, United Kingdom, Republic of Korea)')
+                spec = ('categorical (op: eq, value: the WCA country id, e.g. USA, China, '
+                        'Japan, Poland, United Kingdom, Korea for South Korea, Taiwan)')
             else:
                 spec = f'categorical (op: eq, value: one event id from {_EVENT_IDS})'
         aliases = f"  [also: {', '.join(attr.aliases)}]" if attr.aliases else ''
@@ -473,5 +504,8 @@ class QuestionParser:
                 logger.warning('parser returned unrecognised event %r', value)
                 return None
             return Predicate(key, 'eq', event_id)
+
+        if key == 'country_id':
+            return Predicate(key, 'eq', _coerce_country_id(value))
 
         return Predicate(key, 'eq', value)
