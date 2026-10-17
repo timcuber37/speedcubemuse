@@ -2029,12 +2029,6 @@ tr:hover td {
 .move-miss .move-a { color: #dc2626; }
 
 .move-note { border-left-color: #e2e5ea; color: #9ca3af; }
-.move-note-why {
-    display: block;
-    font-size: .78rem;
-    color: #9ca3af;
-    margin-top: 3px;
-}
 
 .feed-empty {
     text-align: center;

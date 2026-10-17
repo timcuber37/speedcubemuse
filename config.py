@@ -78,6 +78,14 @@ SECRET_KEY = os.getenv("SECRET_KEY", "")
 COMMAND_PREFIX = os.getenv("COMMAND_PREFIX", "!wca")
 MAX_QUERY_RESULTS = int(os.getenv("MAX_QUERY_RESULTS", "50"))
 
+# Limits on the main query feature. Its SQL is written by a model that a user
+# can steer, so these bound what any one question can cost.
+QUERY_TIMEOUT_SECONDS = int(os.getenv("QUERY_TIMEOUT_SECONDS", "10"))
+# Server-side backstop for the home page's 5-question guest counter, which
+# lives in localStorage and is trivially cleared. Looser than the page's limit
+# so people sharing an IP (a school, a competition venue) aren't caught by it.
+MAX_GUEST_QUERY_QUESTIONS = int(os.getenv("MAX_GUEST_QUERY_QUESTIONS", "15"))
+
 # Ask a Delegate (RAG) Configuration
 VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY", "")
 VOYAGE_EMBED_MODEL = os.getenv("VOYAGE_EMBED_MODEL", "voyage-3-large")

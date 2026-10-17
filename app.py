@@ -18,7 +18,7 @@ if sys.platform == 'win32':
 
 from config import (MAX_QUERY_RESULTS, SUPABASE_URL, SUPABASE_ANON_KEY,
                     WCA_CLIENT_ID, WCA_CLIENT_SECRET, WCA_REDIRECT_URI, SECRET_KEY,
-                    MAX_GUEST_GAME_QUESTIONS)
+                    MAX_GUEST_GAME_QUESTIONS, MAX_GUEST_QUERY_QUESTIONS)
 from services.nl_to_sql import NLToSQLService
 from services.wca_api import WCAService
 from services.auth import get_user_from_token, find_or_create_wca_user, generate_wca_login_link
@@ -93,6 +93,30 @@ def set_security_headers(response):
     return response
 
 
+@app.errorhandler(429)
+def rate_limited(error):
+    """Send rate-limit errors as JSON, the shape every page's fetch expects.
+
+    Flask-Limiter's default is an HTML page, which the pages can't parse and
+    report as a connection failure. Every daily limit is a guest cap that
+    signing in lifts, so those say so.
+    """
+    if 'day' in str(error.description):
+        message = 'You\'ve reached today\'s guest limit. Sign in to keep asking questions.'
+    else:
+        message = 'You\'re sending questions too quickly. Wait a minute and try again.'
+    return jsonify({'error': message}), 429
+
+
+def _is_authenticated() -> bool:
+    """Return True if the current request carries a valid Supabase token.
+
+    Exempts signed-in users from the guest day-caps.
+    """
+    user, _ = get_current_user()
+    return user is not None
+
+
 # --- Pages ---
 
 @app.route('/')
@@ -143,6 +167,7 @@ def delegate():
 
 @app.route('/query', methods=['POST'])
 @limiter.limit("10 per minute")
+@limiter.limit(f"{MAX_GUEST_QUERY_QUESTIONS} per day", exempt_when=_is_authenticated)
 @usage_source("web")
 def query():
     data = request.get_json()
@@ -191,15 +216,9 @@ def query():
         return jsonify({'error': 'We couldn\'t look up your answer right now. Please try again.'}), 500
 
 
-def _is_delegate_authenticated() -> bool:
-    """Return True if the current request carries a valid Supabase token."""
-    user, _ = get_current_user()
-    return user is not None
-
-
 @app.route('/api/delegate/ask', methods=['POST'])
 @limiter.limit("5 per minute")
-@limiter.limit("10 per day", exempt_when=_is_delegate_authenticated)
+@limiter.limit("10 per day", exempt_when=_is_authenticated)
 @usage_source("web")
 def delegate_ask():
     if not delegate_service.is_ready():

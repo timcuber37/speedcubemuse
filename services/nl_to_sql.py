@@ -16,6 +16,10 @@ def _execution_error(results) -> str:
         return str(results[0].get('message', 'Unknown error'))
     return None
 
+
+# MySQL comment openers and closer; see validate_sql.
+_COMMENT_MARKERS = ('/*', '*/', '--', '#')
+
 # Structured output schema: the API guarantees the response is valid JSON in
 # this shape, so no markdown-fence stripping is needed.
 _SQL_OUTPUT_FORMAT = {
@@ -191,6 +195,7 @@ WHERE c.name LIKE '%World Championship 2023%' AND r.event_id = '333'
 {self.schema_context}
 
 Generate a SQL query that answers the user's question: set "sql" to the query and "error" to null.
+The query must be a single SELECT statement with no comments and no semicolons.
 If the question cannot be answered with SQL against this schema, set "sql" to null and "error" to a brief reason."""
 
 
@@ -255,7 +260,8 @@ If the question cannot be answered with SQL against this schema, set "sql" to nu
             logger.warning(f"Translation declined: {data.get('error')}")
             return None
 
-        sql_query = data["sql"].strip()
+        # A single trailing ';' is harmless and common; any other is rejected.
+        sql_query = data["sql"].strip().removesuffix(';').rstrip()
 
         if not self.validate_sql(sql_query):
             logger.warning(f"Rejected unsafe SQL: {sql_query}")
@@ -371,16 +377,34 @@ Generate a corrected SQL query that answers the question.""",
             return None
 
     def validate_sql(self, sql_query: str) -> bool:
-        """Validate that SQL is a safe read-only SELECT query."""
+        """Validate that SQL is a single read-only SELECT statement.
+
+        The text is checked whole, string literals included. That rejects the
+        rare harmless query with a ';' or '#' inside a string, but it never has
+        to agree with MySQL about where a string ends — a disagreement that
+        could hide a second statement.
+        """
         sql_upper = sql_query.strip().upper()
 
         if not sql_upper.startswith('SELECT'):
             return False
 
+        # aiomysql always enables multi-statement mode, so anything after a
+        # ';' would run as a second statement. _generate_sql strips a trailing
+        # one before this check.
+        if ';' in sql_upper:
+            return False
+
+        # Rejected rather than stripped: MySQL executes the body of a /*! */
+        # comment, so a comment can hide a whole statement from the keyword
+        # check below ('/*!50000DROP' has no word boundary before DROP).
+        if any(marker in sql_upper for marker in _COMMENT_MARKERS):
+            return False
+
         forbidden = [
             'DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'TRUNCATE',
             'CREATE', 'REPLACE', 'GRANT', 'REVOKE', 'EXEC', 'EXECUTE',
-            'INTO OUTFILE', 'INTO DUMPFILE', 'LOAD_FILE'
+            r'INTO\s+OUTFILE', r'INTO\s+DUMPFILE', 'LOAD_FILE'
         ]
         for keyword in forbidden:
             # Check as whole word to avoid false positives (e.g. "UPDATES" in a column name)

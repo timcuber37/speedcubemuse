@@ -68,6 +68,18 @@ class BotCommandsTests(unittest.IsolatedAsyncioTestCase):
         for alias in ('q', 'ask'):
             self.assertIs(self.module.bot.get_command(alias), self.module.query_wca)
 
+    async def test_query_has_a_per_user_cooldown(self):
+        command = self.module.query_wca
+        self.assertEqual((command.cooldown.rate, command.cooldown.per), (5, 60.0))
+        self.assertEqual(command._buckets.type, commands.BucketType.user)
+
+    async def test_cooldown_error_tells_the_user_when_to_retry(self):
+        ctx = SimpleNamespace(send=AsyncMock())
+        error = commands.CommandOnCooldown(
+            commands.Cooldown(5, 60.0), 42.0, commands.BucketType.user)
+        await self.module.on_command_error(ctx, error)
+        ctx.send.assert_awaited_once_with('⏳ Slow down — try again in 42s.', ephemeral=True)
+
     async def test_query_acknowledges_before_lookup_and_returns_results(self):
         ctx = self.make_slash_context()
 

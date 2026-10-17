@@ -1,4 +1,5 @@
 """WCA API service for executing queries and fetching data."""
+import asyncio
 import logging
 import re
 import ssl
@@ -7,9 +8,19 @@ import certifi
 from typing import List, Dict, Any
 from unidecode import unidecode
 from wcwidth import wcswidth
-from config import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, DB_SSL
+from config import (DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, DB_SSL,
+                    QUERY_TIMEOUT_SECONDS)
 
 logger = logging.getLogger(__name__)
+
+# Rows kept from any one query. Well above MAX_QUERY_RESULTS so "showing 50 of
+# N" stays accurate for ordinary queries, but a query that matches millions of
+# rows can't pull them all into the 512 MB machine's memory.
+MAX_FETCH_ROWS = 1000
+
+# Backstop for when the server-side max_execution_time doesn't fire (a hung
+# network, or a server that ignores it), so a worker is never held indefinitely.
+CLIENT_TIMEOUT_SECONDS = QUERY_TIMEOUT_SECONDS + 5
 
 
 class WCAService:
@@ -39,6 +50,11 @@ class WCAService:
                     'minsize': 1,
                     'maxsize': 10,
                     'autocommit': True,
+                    # Server-side time limit on every SELECT this pool runs.
+                    # Supported by MySQL 5.7.8+ and TiDB, in milliseconds.
+                    'init_command': (
+                        f'SET SESSION max_execution_time = {QUERY_TIMEOUT_SECONDS * 1000}'
+                    ),
                 }
                 if DB_SSL:
                     # Verify against the certifi CA bundle, not the OS trust
@@ -69,22 +85,28 @@ class WCAService:
             pool = await self._get_pool()
 
             async with pool.acquire() as conn:
-                async with conn.cursor(aiomysql.DictCursor) as cursor:
-                    # Execute the query
-                    await cursor.execute(sql_query)
+                try:
+                    results = await asyncio.wait_for(
+                        self._fetch_capped(conn, sql_query), CLIENT_TIMEOUT_SECONDS)
+                except asyncio.TimeoutError:
+                    # The query may still be running. Close the connection so
+                    # the pool discards it instead of handing out a busy one.
+                    conn.close()
+                    logger.warning(f"Query timed out after {CLIENT_TIMEOUT_SECONDS}s")
+                    return [{
+                        "error": "Execution failed",
+                        "message": f"Query timed out after {CLIENT_TIMEOUT_SECONDS} seconds",
+                    }]
 
-                    # Fetch results
-                    results = await cursor.fetchall()
+                # Convert to list of dicts (aiomysql.SSDictCursor already returns dicts)
+                result_list = [dict(row) for row in results]
 
-                    # Convert to list of dicts (aiomysql.DictCursor already returns dicts)
-                    result_list = [dict(row) for row in results]
+                logger.info(f"Query returned {len(result_list)} results")
 
-                    logger.info(f"Query returned {len(result_list)} results")
+                # Post-process results to format times properly
+                result_list = self._post_process_results(result_list)
 
-                    # Post-process results to format times properly
-                    result_list = self._post_process_results(result_list)
-
-                    return result_list
+                return result_list
 
         except Exception as e:
             logger.error(f"Error executing query: {e}", exc_info=e)
@@ -92,6 +114,23 @@ class WCAService:
                 "error": "Execution failed",
                 "message": str(e)
             }]
+
+    async def _fetch_capped(self, conn, sql_query: str) -> list:
+        """Run a query and return at most MAX_FETCH_ROWS rows.
+
+        Unbuffered, so rows are read as they're fetched rather than all at once.
+        """
+        cursor = await conn.cursor(aiomysql.SSDictCursor)
+        await cursor.execute(sql_query)
+        rows = await cursor.fetchmany(MAX_FETCH_ROWS + 1)
+        if len(rows) > MAX_FETCH_ROWS:
+            # Closing the cursor would read every remaining row off the wire
+            # to clear the connection. Dropping the connection is cheaper.
+            conn.close()
+            logger.info(f"Query truncated at {MAX_FETCH_ROWS} rows")
+            return rows[:MAX_FETCH_ROWS]
+        await cursor.close()
+        return rows
 
     def _sanitize_name(self, name: str) -> str:
         """

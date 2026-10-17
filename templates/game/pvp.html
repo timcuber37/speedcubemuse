@@ -93,6 +93,7 @@
             <button type="submit" id="pvp-ask-btn">Ask</button>
         </div>
     </form>
+    <p id="play-error" class="game-error hidden" role="alert"></p>
     <p class="form-help">Ask about their country, records, or competition history.</p>
 
     <div class="guess-bar">
@@ -284,6 +285,9 @@
           : mine             ? 'is-yours' : 'is-theirs');
 
         $('match').classList.toggle('awaiting', !mine);
+        // An error is about the move you just tried; once the turn has passed
+        // there is nothing left to retry.
+        if (!mine) hide('play-error');
         // Questions are closed during a rebuttal: it is one guess, not a turn.
         $('match').classList.toggle('rebuttal-only', rebuttal);
         $('turn-lock').classList.toggle('hidden', mine);
@@ -368,24 +372,35 @@
 
     // -- play --------------------------------------------------------------
 
+    // Shown beside the controls rather than as a card in the feed: the feed
+    // scrolls, so a note appended there can land out of view.
+    function showPlayError(message) {
+        $('play-error').textContent = message;
+        show('play-error');
+    }
+
     $('ask-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const q = $('question').value.trim();
         if (!q) return;
-        $('question').value = '';
+        hide('play-error');
+        $('question').disabled = true;
         $('pvp-ask-btn').disabled = true;
         const r = await api(`/api/game/pvp/${matchId}/ask`, { question: q });
-        if (r.error && r.unanswerable) {
-            // Never reached the opponent's cuber, so it costs no turn and the
-            // server has no record of it — it belongs in your own column only,
-            // and refresh() will drop it since it was never a move.
-            const li = document.createElement('li');
-            li.className = 'move move-note';
-            li.innerHTML = `<span class="move-q">${esc(q)}` +
-                           `<span class="move-note-why">${esc(r.error)}</span></span>`;
-            $('feed-you').appendChild(li);
-            $('feed-empty').classList.add('hidden');
-            return;   // nothing changed server-side, so don't re-fetch
+        if (r.error) {
+            // A refused question costs no turn, so hand the controls straight
+            // back with the question still in the box to rephrase. If the turn
+            // has in fact moved on, refresh() below locks them again — and the
+            // server enforces turns regardless.
+            showPlayError(r.error);
+            $('question').disabled = false;
+            $('pvp-ask-btn').disabled = false;
+            $('question').focus();
+            // Unanswerable questions never reach the opponent's cuber, so
+            // nothing changed server-side and there is nothing to re-fetch.
+            if (r.unanswerable) return;
+        } else {
+            $('question').value = '';
         }
         refresh();
     });
@@ -398,7 +413,9 @@
         guessTimer = setTimeout(() => runSearch(q, 'guess-suggestions', async (id) => {
             $('guess-input').value = '';
             hide('guess-suggestions');
-            await api(`/api/game/pvp/${matchId}/guess`, { wca_id: id });
+            hide('play-error');
+            const r = await api(`/api/game/pvp/${matchId}/guess`, { wca_id: id });
+            if (r.error) showPlayError(r.error);
             refresh();
         }), 180);
     });

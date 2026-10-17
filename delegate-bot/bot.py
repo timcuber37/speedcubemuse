@@ -79,6 +79,9 @@ async def on_message(message):
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
         return  # Ignore unknown commands
+    elif isinstance(error, commands.CommandOnCooldown):
+        # ephemeral applies to slash invocations and is ignored for prefix ones.
+        await ctx.send(f"⏳ Slow down — try again in {error.retry_after:.0f}s.", ephemeral=True)
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send(f"Missing required argument: {error.param.name}")
     else:
@@ -165,6 +168,10 @@ async def handle_thread_followup(message: discord.Message):
 @bot.hybrid_command(name='query', aliases=['q', 'ask'],
                     description='Ask about WCA competitors, records, and results')
 @app_commands.describe(question='Your question about WCA competition results')
+# Same rate as /delegate. Each question can take two Sonnet calls (write the
+# SQL, then repair it) plus up to two database queries.
+# Hybrid commands apply this to both the slash and the prefix form.
+@commands.cooldown(5, 60.0, commands.BucketType.user)
 @usage_source("discord")
 async def query_wca(ctx, *, question: str):
     """
