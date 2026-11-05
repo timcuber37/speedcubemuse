@@ -10,6 +10,7 @@ An AI-powered tool that lets you query World Cube Association competition data u
 - Query WCA statistics using plain English — no SQL required
 - **Ask a Delegate** — AI chatbot grounded in WCA Regulations and Guidelines using a RAG pipeline
 - **Guess the Cuber** — an Akinator-style guessing game over the WCA competitor pool, in three modes
+- **Nemesis** — find competitors who beat every one of your ranked personal bests, count competitors you nemesize, and compare two competitors across official events
 - Web interface with instant results displayed in formatted tables
 - Discord bot with the same query capabilities
 - Google and WCA OAuth sign-in via Supabase Auth
@@ -51,6 +52,51 @@ The database is refreshed automatically on the 1st of each month by the `Monthly
 1. User asks a WCA rules question in plain English
 2. The question is matched against all 697 WCA regulations and guidelines using Voyage AI vector embeddings and pgvector similarity search, then re-ranked
 3. Claude generates a grounded response with citations linked to the official WCA Regulations page
+
+### Nemesis
+
+Visit `/nemesis` to search by name or WCA ID. Every search compares both singles
+and averages. Two counters show how many competitors nemesize the selected competitor and how
+many they nemesize. Both lists are paginated, and each row can open a head-to-head
+personal-best comparison. The table has three columns: the result type and each
+competitor's personal best, with single and average on separate rows for each
+event. Multi-Blind has only a single row; its nonexistent average is excluded
+from comparison scores and nemesis calculations. Choose the default event order
+or sort by percentage difference from the
+first competitor's biggest wins to their worst losses. Percentages use
+`100 × (opponent PB − first competitor PB) / opponent PB`; ties are zero.
+Missing results and encoded Multi-Blind scores have no comparable percentage
+and appear last, preserving event order among unranked rows. Sorting happens
+in the browser without another database query. URLs preserve competitors,
+direction, page, and sort order.
+
+A nemesis must have a strictly better result for **every valid ranked result the
+other competitor has** across singles and averages. Ties block dominance. Missing
+results are not wins, and someone without any valid ranked results
+is excluded from both relationships. Only current official events
+(`events.rank < 800`) count; upcoming and discontinued events are excluded.
+Head-to-head scores count singles and averages separately, and
+report ties and comparisons with missing results separately. FMC and Multi-Blind
+use their WCA result formats.
+
+`services/nemesis.py` queries `persons`, `events`, `ranks_single`, and
+`ranks_average` directly, without model calls, a new migration, or loading the
+ranking pool into application memory. Database queries use the existing
+`QUERY_TIMEOUT_SECONDS` limit. Overview pages have a bounded, five-minute
+per-worker cache; new WCA exports are picked up when entries expire. Counts
+come from the full eligible ranking pool, independent of list pagination.
+Uncached counts still scan the ranking tables. In local checks against TiDB,
+an uncached overview took about 10–13 seconds and a head-to-head lookup took
+about 2–6 seconds; these are sample measurements, not a latency guarantee.
+
+The API is public: `GET /api/nemesis/search?q=...`,
+`GET /api/nemesis/<WCA_ID>?direction=nemeses&page=1`, and
+`GET /api/nemesis/compare?left=<WCA_ID>&right=<WCA_ID>`.
+All comparisons include both singles and averages, including old links with a
+`mode` parameter. Directions are `nemeses` and `nemesized`.
+Search, comparison, and overview endpoints have separate per-minute
+rate limits. Run the offline comparison and route tests with
+`python -m pytest tests/test_nemesis.py`.
 
 ### Guess the Cuber
 

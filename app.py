@@ -28,6 +28,7 @@ from services import saved_queries
 from services.api_usage import usage_source
 from extensions import limiter
 from blueprints.game import game_bp
+from blueprints.nemesis import nemesis_bp
 
 _WCA_AUTH_URL = "https://www.worldcubeassociation.org/oauth/authorize"
 _WCA_TOKEN_URL = "https://www.worldcubeassociation.org/oauth/token"
@@ -48,6 +49,7 @@ wca_service = WCAService()
 delegate_service = DelegateRAGService()
 
 app.register_blueprint(game_bp)
+app.register_blueprint(nemesis_bp)
 
 MAX_DELEGATE_HISTORY_MESSAGES = 32
 MAX_DELEGATE_HISTORY_CHARS = 12000  # ~3 K tokens; prevents history token-stuffing

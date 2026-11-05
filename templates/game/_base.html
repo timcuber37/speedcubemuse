@@ -10,6 +10,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Guess the Cuber{% endblock %} - SpeedCubeMuse</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    {% block styles %}{% endblock %}
     <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-32.png') }}">
     <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon-16.png') }}">
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
@@ -21,7 +22,8 @@
             <div class="nav-links">
                 <a href="/" class="nav-link">Home</a>
                 <a href="/delegate" class="nav-link">Ask a Delegate</a>
-                <a href="/game" class="nav-link active">Guess the Cuber</a>
+                <a href="/game" class="nav-link{% if request.blueprint == 'game' %} active{% endif %}">Guess the Cuber</a>
+                <a href="/nemesis" class="nav-link{% if request.blueprint == 'nemesis' %} active{% endif %}">Nemesis</a>
                 <a href="/about" class="nav-link">About</a>
                 <button class="auth-btn" id="auth-btn" onclick="handleAuth()">Sign in</button>
             </div>
@@ -33,7 +35,9 @@
     </div>
 
     <footer class="footer">
+        {% block footer %}
         <p>Games use the <a href="/about">WCA results available here</a>. Recent records and rankings may not be included yet.</p>
+        {% endblock %}
     </footer>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -44,7 +48,7 @@
         let sbClient = null;
         let currentUser = null;
 
-        if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+        if (SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase?.createClient) {
             sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
             sbClient.auth.getSession().then(({ data: { session } }) => {
                 currentUser = session?.user || null;

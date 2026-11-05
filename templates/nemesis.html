@@ -1,0 +1,100 @@
+{% extends 'game/_base.html' %}
+{% block title %}Nemesis{% endblock %}
+{% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='nemesis.css', v=asset_versions['nemesis.css']) }}">{% endblock %}
+{% block content %}
+<div class="nemesis-page">
+    <header>
+        <p class="nemesis-eyebrow">WCA PERSONAL BESTS</p>
+        <h1>Meet your nemeses</h1>
+        <p class="subtitle">Find who beats you across your events, see who you nemesize, and compare any two competitors.</p>
+    </header>
+
+    <section class="nemesis-panel" aria-labelledby="find-heading">
+        <h2 id="find-heading">Find a competitor</h2>
+        <form id="nemesis-form" class="nemesis-search-form">
+            <div class="nemesis-search-field">
+                <label for="competitor-search">Name or WCA ID</label>
+                <input id="competitor-search" type="search" placeholder="Search your name or WCA ID" autocomplete="off" maxlength="100" required aria-describedby="search-help" aria-controls="competitor-suggestions">
+                <div id="competitor-suggestions" class="nemesis-suggestions" hidden></div>
+            </div>
+            <button type="submit" class="nemesis-button">Find nemeses</button>
+        </form>
+        <p id="search-help" class="form-help">Choose a name from the search results, or enter a full WCA ID.</p>
+        <details class="nemesis-rules">
+            <summary>What counts as a nemesis?</summary>
+            <p>Every comparison includes both singles and averages. A nemesis has a strictly better personal best for every single and average you have. They must also have a result for each of those comparisons.</p>
+            <p>Ties do not count as wins. Only valid ranked results in current official WCA events count; missing results, DNF and DNS do not create wins. Someone with no valid ranked results cannot nemesize or be nemesized. The reverse comparison uses the other competitor’s results, so the two lists can cover different events.</p>
+        </details>
+    </section>
+
+    <p id="nemesis-error" class="nemesis-error" role="alert" hidden></p>
+    <p id="nemesis-status" class="nemesis-status" role="status" aria-live="polite"></p>
+
+    <section id="nemesis-overview" aria-labelledby="competitor-heading" hidden>
+        <div class="nemesis-person-heading">
+            <div><h2 id="competitor-heading"></h2><p id="competitor-meta"></p></div>
+            <a id="competitor-wca" target="_blank" rel="noopener">WCA profile ↗</a>
+        </div>
+        <div class="nemesis-counters" aria-label="Comparison direction">
+            <button id="show-nemeses" type="button" class="nemesis-counter" aria-pressed="true">
+                <strong id="nemeses-count">—</strong><span>Nemesize this competitor</span>
+            </button>
+            <button id="show-nemesized" type="button" class="nemesis-counter" aria-pressed="false">
+                <strong id="nemesized-count">—</strong><span>Nemesized by this competitor</span>
+            </button>
+        </div>
+        <div class="nemesis-panel">
+            <h3 id="nemesis-list-heading">Their nemeses</h3>
+            <p id="nemesis-empty" class="form-help" hidden></p>
+            <ul id="nemesis-list" class="nemesis-list"></ul>
+            <nav id="nemesis-pagination" class="nemesis-pagination" aria-label="Competitor results pages" hidden>
+                <button id="nemesis-prev" class="nemesis-button secondary" type="button">Previous</button>
+                <span id="nemesis-page-label"></span>
+                <button id="nemesis-next" class="nemesis-button secondary" type="button">Next</button>
+            </nav>
+        </div>
+    </section>
+
+    <section class="nemesis-panel nemesis-head-to-head" aria-labelledby="h2h-heading">
+        <h2 id="h2h-heading">Head to head</h2>
+        <p class="form-help">Choose your first competitor above, then pick an opponent here or use a Compare button in the list.</p>
+        <form id="opponent-form" class="nemesis-search-form">
+            <div class="nemesis-search-field">
+                <label for="opponent-search">Opponent’s name or WCA ID</label>
+                <input id="opponent-search" type="search" placeholder="Find an opponent" autocomplete="off" maxlength="100" required aria-controls="opponent-suggestions">
+                <div id="opponent-suggestions" class="nemesis-suggestions" hidden></div>
+            </div>
+            <button type="submit" class="nemesis-button">Compare</button>
+        </form>
+        <p id="compare-error" class="nemesis-error" role="alert" hidden></p>
+        <p id="compare-status" class="nemesis-status" role="status" aria-live="polite"></p>
+        <div id="comparison" hidden>
+            <h3 id="comparison-heading"></h3>
+            <p id="comparison-relationship" class="nemesis-relationship"></p>
+            <p id="comparison-score" class="form-help"></p>
+            <div class="nemesis-sort">
+                <label for="comparison-sort">Sort results</label>
+                <select id="comparison-sort" aria-describedby="comparison-sort-help">
+                    <option value="events">Default event order</option>
+                    <option value="advantage">Percentage difference (high to low)</option>
+                </select>
+            </div>
+            <p id="comparison-sort-help" class="form-help" hidden></p>
+            <div class="nemesis-table-wrap" tabindex="0" role="region" aria-label="Personal best comparison table">
+                <table class="nemesis-table">
+                    <caption id="comparison-caption"></caption>
+                    <thead id="comparison-table-head"></thead>
+                    <tbody id="comparison-table-body"></tbody>
+                </table>
+            </div>
+            <p class="form-help">Bold results marked “Better” win that comparison. A dash means no valid ranked result; it is not counted as a win. Scores count single and average comparisons separately.</p>
+        </div>
+    </section>
+</div>
+{% endblock %}
+{% block footer %}
+<p>Results from the <a href="https://www.worldcubeassociation.org/export/results" target="_blank" rel="noopener">WCA data published on {{ db_meta.export_date_display }}</a>. Newer results may not be included yet. Comparison results may be cached for five minutes.</p>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='nemesis.js', v=asset_versions['nemesis.js']) }}" defer></script>
+{% endblock %}
