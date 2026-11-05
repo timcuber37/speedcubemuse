@@ -28,7 +28,7 @@ The app queries a database populated from the official [WCA data export](https:/
 | Competitions | 18,280 |
 | Events | 17 |
 
-The database is refreshed automatically on the 1st of each month by the `Monthly WCA database refresh` GitHub Action, which runs `scripts/update_database.py` to download the latest WCA export and reload all tables. The script records the export date and row counts in a `site_meta` table that the home and About pages read at render time, so a refresh reaches the site with no commit or redeploy.
+The database is refreshed automatically on the 1st and 15th of each month at 09:00 UTC by the `WCA database refresh (1st and 15th)` GitHub Action, which runs `scripts/update_database.py` to download the latest WCA export and reload all tables. The script records the export date and row counts in a `site_meta` table that the home and About pages read at render time, so a refresh reaches the site with no commit or redeploy.
 
 ## Tech Stack
 
@@ -105,7 +105,7 @@ engine** — Akinator is an information-gain search over a feature matrix, not a
 language model, and this works the same way.
 
 `scripts/build_cuber_profiles.py` precomputes ~37 attributes for **every WCA
-competitor** into a `cuber_profiles` table during the monthly refresh — all
+competitor** into a `cuber_profiles` table during each scheduled refresh — all
 ~297,000 of them. A `fame` score (records, World Championship podiums, recency,
 result volume) ranks the ~2,100 who have held a continental record or better or
 sit in a current world top 100, and those form the first three tiers.
@@ -170,7 +170,7 @@ milliseconds, including on a worker abort, to distinguish slow loading from
 scoring and help investigate CPU contention.
 
 Each worker checks a small generation marker hourly and reuses its loaded
-competitor pools until the monthly profile rebuild publishes a new generation.
+competitor pools until the scheduled profile rebuild publishes a new generation.
 A full read every 30 days recovers from an update that missed the marker. A larger
 cached pool also serves smaller difficulties. Solo games on Everyone use a
 compact ID/name directory to draw a random competitor and serve name searches;
@@ -381,7 +381,7 @@ wca_statbot/
 ├── .github/
 │   └── workflows/
 │       ├── deploy.yml            # CI/CD (deploys website and bot together on push)
-│       └── update-database.yml   # Monthly WCA export refresh (1st of month, 09:00 UTC)
+│       └── update-database.yml   # WCA export refresh (1st and 15th, 09:00 UTC)
 ├── Dockerfile              # Shared image for website and bot
 ├── fly.toml                # speedcubemuse app: website and bot process groups
 ├── requirements.txt        # Python dependencies
@@ -492,7 +492,7 @@ to sync commands to a specific test server; leave it unset for global commands.
 
 ### Update the database
 
-Runs monthly on its own (see [Deployment](#deployment)); these are for running it by hand:
+Runs on the 1st and 15th of each month (see [Deployment](#deployment)); these are for running it by hand:
 
 ```bash
 python scripts/update_database.py                 # skip if already up to date
@@ -628,9 +628,9 @@ fly secrets set -a speedcubemuse \
 Leave `DISCORD_GUILD_ID` unset in production so slash commands sync globally.
 Existing secrets stay in place; only supply values you need to add or change.
 
-### Monthly database refresh
+### Scheduled database refresh
 
-`.github/workflows/update-database.yml` reloads the WCA export on the 1st of
+`.github/workflows/update-database.yml` reloads the WCA export on the 1st and 15th of
 each month at 09:00 UTC (also runnable on demand from the Actions tab, with an optional
 `force` input). It writes only to TiDB — no commit, no redeploy — because the
 site reads its stats from the `site_meta` table at render time.
