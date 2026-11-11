@@ -19,9 +19,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent / 'scripts'))
 from build_cuber_profiles import (RANK_BANDS, RECENCY_FLOOR,  # noqa: E402
                                   fame_score, rank_band_weight, recency_weight)
 
-from services.game.attributes import (ATTRIBUTES, BY_KEY, EVENT_GROUPS,
-                                      EVENT_NAMES, EVENT_TIERS, event_weight,
-                                      group_of)
+from services.game.attributes import (ATTRIBUTES, BY_KEY, CURRENT_EVENTS,
+                                      EVENT_GROUPS, EVENT_NAMES, EVENT_TIERS,
+                                      RELATIONS, event_weight, group_of,
+                                      pool_relations)
 from services.game.profiles import (RESIDENT_TIERS, TIERS, get_engine,
                                     load_profiles, search_by_name)
 
@@ -263,6 +264,35 @@ def test_event_groups_cover_the_user_facing_definitions():
     assert len(seen) == len(set(seen))
 
 
+def test_every_relation_holds_for_every_profile(profiles):
+    """The engine stops asking a question once a relation settles it.
+
+    A relation that fails for even one cuber means that cuber's game skips a
+    question with a wrong "known" answer. Most relations hold by construction,
+    and this is what catches a builder change that breaks one. The few that
+    depend on the sport (top-100 3x3 times, current record holders having set
+    records) are checked here too.
+    """
+    clauses = RELATIONS + tuple(pool_relations(profiles))
+    for clause in clauses:
+        broken = [r['wca_id'] for r in profiles
+                  if not any(p.test(r['attrs']) is t for p, t in clause)]
+        assert not broken, (
+            f'{[(p.as_id(), t) for p, t in clause]} fails for {len(broken)} '
+            f'profiles, e.g. {broken[:5]}'
+        )
+
+
+def test_every_country_has_one_continent(profiles):
+    """Otherwise pool_relations quietly drops it and "USA" stops settling "North America"."""
+    continents = {}
+    for row in profiles:
+        continents.setdefault(row['attrs']['country_id'], set()).add(
+            row['attrs']['continent_id'])
+    split = {c: v for c, v in continents.items() if len(v) > 1}
+    assert not split
+
+
 def test_shared_strings_are_folded(profiles):
     """Attribute keys must be one object each, not one per row.
 
@@ -292,9 +322,22 @@ def test_top100_events_is_consistent_with_its_count(profiles):
 
 def test_event_tiers_cover_every_current_event():
     """A current event missing from the tiers silently falls to the lowest one."""
-    current = set(EVENT_NAMES) - {'magic', 'mmagic', '333ft', '333mbo', 'fto'}
-    missing = sorted(current - set(EVENT_TIERS))
+    missing = sorted(set(CURRENT_EVENTS) - set(EVENT_TIERS))
     assert not missing, f'current events with no popularity tier: {missing}'
+
+
+def test_current_events_are_the_official_seventeen():
+    """FTO is in the export but not official; add it to CURRENT_EVENTS when it is."""
+    assert len(CURRENT_EVENTS) == len(set(CURRENT_EVENTS)) == 17
+    assert set(CURRENT_EVENTS) <= set(EVENT_NAMES)
+    assert not {'fto', 'magic', 'mmagic', '333ft', '333mbo'} & set(CURRENT_EVENTS)
+
+
+def test_competed_all_events_means_every_current_event(profiles):
+    """Not just 17 distinct events: those can include retired ones."""
+    for row in profiles:
+        if row['attrs']['competed_all_events']:
+            assert row['attrs']['events_competed'] >= len(CURRENT_EVENTS), row['wca_id']
 
 
 def test_event_weights_descend_by_tier():

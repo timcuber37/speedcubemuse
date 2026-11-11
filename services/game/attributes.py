@@ -38,6 +38,20 @@ EVENT_GROUPS: dict[str, tuple[str, ...]] = {
     'side_events':  ('pyram', 'minx', 'skewb', 'sq1', 'clock'),
 }
 
+# The official WCA events the game treats as current: what "competed in every
+# current event" checks, and the only events that count for current rankings.
+#
+# Declared rather than read from the export. The export already lists FTO as
+# a live event (its rank is below the 900 that marks retired ones), but it isn't
+# official, and requiring it would make "every current event" impossible. Add
+# 'fto' here when it becomes official. A listed event the export marks retired
+# still drops out on its own.
+CURRENT_EVENTS: tuple[str, ...] = (
+    '222', '333', '444', '555', '666', '777',
+    '333bf', '444bf', '555bf', '333mbf',
+    '333oh', '333fm', 'clock', 'minx', 'pyram', 'skewb', 'sq1',
+)
+
 # How much attention an event actually gets, used to weight the fame score that
 # sorts difficulty tiers. A 3x3 world record makes the rounds; a 5BLD one is
 # known inside its own community. Tier 1 is the WCA's headline event, tier 2 the
@@ -140,7 +154,8 @@ class Attribute:
     # Boolean attributes that are necessarily true whenever this one is. A world
     # record is also a continental record, so answering yes to `has_wr` settles
     # `has_cr_or_better` and the engine must not ask it. Applied transitively,
-    # and in reverse for a "no" — see Engine.implied().
+    # and in reverse for a "no". Relations that span other kinds of attribute
+    # are declared in RELATIONS below.
     implies: tuple[str, ...] = ()
     # Alternative views of the same topic. Once a game asks about one attribute
     # in a family, use that attribute for any refinements instead of switching
@@ -607,3 +622,183 @@ def candidate_predicates(rows: list[dict]) -> list[Predicate]:
                     if seen & set(members)
                 )
     return preds
+
+
+# ---------------------------------------------------------------------------
+# Relations — what one answer says about other attributes
+# ---------------------------------------------------------------------------
+#
+# Attributes overlap heavily. "Their strongest event is 3x3" means they are not
+# a one-handed specialist; "not world top 100 in anything" means not top 100 in
+# 2x2 either; "they represent the USA" answers "are they from North America?".
+# Before these relations were declared, a recorded game asked 39 questions and
+# 17 of them repeated something the player had already said.
+#
+# A relation is written as clauses. A clause is a tuple of (predicate, truth)
+# literals, and at least one literal in it holds for every cuber. "A implies B"
+# becomes the clause (A is false, or B is true), which also covers the reverse
+# case: if B is false, A is false. services/game/knowledge.py handles thresholds
+# and categorical exclusivity itself, so a clause only has to name one threshold
+# or one value on each side.
+#
+# Almost every relation follows from how scripts/build_cuber_profiles.py derives
+# the attributes. The ones that depend on how the sport works instead are marked.
+# A DB-backed test checks every clause against the full live table, so a builder
+# change that breaks one fails there, not in a game.
+
+Clause = tuple[tuple[Predicate, bool], ...]
+
+
+def _is(key: str) -> Predicate:
+    return Predicate(key, 'is', True)
+
+
+def _eq(key: str, value: str) -> Predicate:
+    return Predicate(key, 'eq', value)
+
+
+def _gte(key: str, value: int) -> Predicate:
+    return Predicate(key, 'gte', value)
+
+
+def _top100(event: str) -> Predicate:
+    return Predicate('top100_events', 'has', event)
+
+
+def _top100_group(group: str) -> Predicate:
+    return Predicate('top100_events', 'has_group', group)
+
+
+def _implies(a: Predicate, b: Predicate, truth: bool = True) -> Clause:
+    """If `a` holds, `b` has `truth`. Also: if `b` does not, `a` is false."""
+    return ((a, False), (b, truth))
+
+
+def _equivalent(a: Predicate, b: Predicate) -> list[Clause]:
+    return [_implies(a, b), _implies(b, a)]
+
+
+def _any_of(whole: Predicate, parts: list[Predicate]) -> list[Clause]:
+    """`whole` holds exactly when at least one of `parts` does.
+
+    With all of the parts ruled out, `whole` is false. With `whole` true and all
+    but one part ruled out, the remaining part is true.
+    """
+    return [((whole, False), *((p, True) for p in parts)),
+            *(_implies(p, whole) for p in parts)]
+
+
+def _never_exceeds(lesser: str, greater: str) -> list[Clause]:
+    """Numeric `lesser` is never above `greater`, so a bound on one bounds the other."""
+    values = sorted(set(BY_KEY[lesser].thresholds) | set(BY_KEY[greater].thresholds))
+    return [_implies(_gte(lesser, v), _gte(greater, v)) for v in values]
+
+
+def _schema_relations() -> tuple[Clause, ...]:
+    clauses: list[Clause] = []
+
+    for attr in ATTRIBUTES:
+        for target in attr.implies:
+            clauses.append(_implies(_is(attr.key), _is(target)))
+
+    # Records. Each "or better" flag is exactly the tier itself plus the ones
+    # above it: has_cr_or_better is (wr + cr) > 0. So "NR or better, but no CR
+    # or better" settles "at least one national record".
+    clauses += _any_of(_is('has_wr'), [_gte('wr_single_count', 1),
+                                       _gte('wr_average_count', 1)])
+    clauses += _any_of(_is('has_cr_or_better'), [_is('has_wr'),
+                                                 _gte('cr_count', 1)])
+    clauses += _any_of(_is('has_nr_or_better'), [_is('has_cr_or_better'),
+                                                 _gte('nr_count', 1)])
+    # Rank 1 today came from a result that was flagged as a record when it was
+    # set. Results are never deleted, so nobody had a better one at that point.
+    # A change of nationality could break this in principle; it has never
+    # happened in the data.
+    clauses.append(_implies(_is('currently_wr'), _is('has_wr')))
+    clauses.append(_implies(_is('currently_cr_or_better'), _is('has_cr_or_better')))
+    clauses.append(_implies(_is('currently_nr_or_better'), _is('has_nr_or_better')))
+
+    # Rankings. top100_event_count is the size of top100_events, and a top-10
+    # rank is also a top-100 rank.
+    any_top100 = _gte('top100_event_count', 1)
+    two_top100 = _gte('top100_event_count', 2)
+    events = sorted(EVENT_NAMES)
+    for event in events:
+        clauses.append(_implies(_top100(event), any_top100))
+    for i, a in enumerate(events):
+        for b in events[i + 1:]:
+            clauses.append(((_top100(a), False), (_top100(b), False), (two_top100, True)))
+    for group, members in EVENT_GROUPS.items():
+        clauses += _any_of(_top100_group(group), [_top100(e) for e in members])
+        clauses.append(_implies(_top100_group(group), any_top100))
+    clauses.append(_implies(_is('top10_any'), any_top100))
+
+    # Strongest event. main_event is the event with their best world rank,
+    # main_event_group is that event's group, and the specialist flags repeat
+    # one or the other in different wording.
+    for group, members in EVENT_GROUPS.items():
+        clauses += _any_of(_eq('main_event_group', group),
+                           [_eq('main_event', e) for e in members])
+    # 2x2, 3x3, OH and FMC belong to no group, so they rule out every group.
+    for event in events:
+        if group_of(event) is None:
+            clauses += [_implies(_eq('main_event', event),
+                                 _eq('main_event_group', group), False)
+                        for group in EVENT_GROUPS]
+    for flag, same in (
+        ('is_bld_specialist', _eq('main_event_group', 'blind_events')),
+        ('is_bigcube_specialist', _eq('main_event_group', 'big_cubes')),
+        ('is_sideevent_specialist', _eq('main_event_group', 'side_events')),
+        ('is_fmc_specialist', _eq('main_event', '333fm')),
+        ('is_oh_specialist', _eq('main_event', '333oh')),
+    ):
+        clauses += _equivalent(_is(flag), same)
+    # If any of their ranks is in the world top 100, the best one is too.
+    for event in events:
+        clauses.append(((_eq('main_event', event), False), (any_top100, False),
+                        (_top100(event), True)))
+    for group in EVENT_GROUPS:
+        clauses.append(((_eq('main_event_group', group), False), (any_top100, False),
+                        (_top100_group(group), True)))
+
+    # 3x3 milestones. The middle three solves of a sub-10 average include a
+    # sub-10 single.
+    clauses.append(_implies(_is('sub10_333_average'), _is('sub10_333_single')))
+    # Depends on the sport: the current world top 100 in 3x3 is far faster than
+    # either bar, single or average. These only get safer as times drop.
+    clauses.append(_implies(_top100('333'), _is('sub6_333_single')))
+    clauses.append(_implies(_top100('333'), _is('sub10_333_average')))
+
+    # Career. A debut can't come after the latest competition, and every
+    # competition adds at least one result.
+    clauses += _never_exceeds('first_year', 'last_year')
+    clauses += _never_exceeds('comp_count', 'total_results')
+    # Competing in every one of the CURRENT_EVENTS means at least that many
+    # distinct events. (Not the reverse: events_competed counts retired ones.)
+    clauses.append(_implies(_is('competed_all_events'),
+                            _gte('events_competed', len(CURRENT_EVENTS))))
+
+    return tuple(clauses)
+
+
+RELATIONS: tuple[Clause, ...] = _schema_relations()
+
+
+def pool_relations(rows: list[dict]) -> list[Clause]:
+    """Relations supplied by the data rather than the schema: country -> continent.
+
+    The schema doesn't say which continent a country is in, but every row
+    carries both values. A country that ever shows up under two continents gets
+    no relation, so bad data can't produce a wrong one.
+    """
+    continents: dict[str, set] = {}
+    for row in rows:
+        attrs = row['attrs']
+        country = attrs.get('country_id')
+        if country is not None:
+            continents.setdefault(country, set()).add(attrs.get('continent_id'))
+    return [
+        _implies(_eq('country_id', country), _eq('continent_id', next(iter(found))))
+        for country, found in sorted(continents.items())
+        if len(found) == 1 and None not in found
+    ]

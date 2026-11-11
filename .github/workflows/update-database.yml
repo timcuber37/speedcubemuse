@@ -57,6 +57,10 @@ jobs:
           DB_SSL: 'true'
         # On success the script writes the new stats to the `site_meta` table,
         # which the web app reads at render time — no commit or redeploy needed.
+        # It then rebuilds the Guess the Cuber profiles from the downloaded
+        # export, on this runner (~20 s, ~1.5 GB). A failed rebuild fails the
+        # step, so the notification below fires, and the next run retries the
+        # rebuild even if the WCA tables are already current.
         run: python scripts/update_database.py ${{ inputs.force && '--force' || '' }}
 
       - name: Notify Discord on failure

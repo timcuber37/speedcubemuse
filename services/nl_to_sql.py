@@ -70,6 +70,7 @@ Columns: id (bigint), competition_id (varchar), event_id (varchar), round_type_i
 
 **persons** - Competitor information
 Columns: wca_id (varchar), sub_id (int), name (varchar), country_id (varchar), gender (varchar)
+sub_id = 1 is the person's current record (current name and country); sub_id 2+ rows are past names or nationalities. Always join persons with p.sub_id = 1
 
 **competitions** - Competition details
 Columns: id (varchar), name (varchar), city_name (varchar), country_id (varchar), information (text), year (int), month (int), day (int), end_year (int), end_month (int), end_day (int), cancelled (int), event_specs (text), delegates (text), organizers (text), venue (varchar), venue_address (varchar), venue_details (varchar), external_website (varchar), cell_name (varchar), latitude_microdegrees (int), longitude_microdegrees (int)
@@ -108,9 +109,11 @@ IMPORTANT NOTES:
 - -1 means DNF (Did Not Finish), -2 means DNS (Did Not Start), 0 means no result
 - The 'best' column in ranks_single and ranks_average contains the person's best time
 - World rank 1 means world record holder
+- REGIONAL RANKS: country_rank and continent_rank rank only results set while representing the person's CURRENT country/continent. 0 means unranked there (e.g. the person changed nationality and has not competed since), NOT first place. For "top N in <country>" questions filter p.country_id and r.country_rank > 0 and ORDER BY r.country_rank; for "top N in <continent>" filter countries.continent_id and r.continent_rank > 0 and ORDER BY r.continent_rank. Never order a regional ranking by best: best is the person's best in any country, which can be a result set for a previous nationality
 - RECORDS: results.regional_single_record and results.regional_average_record mark records set by that result: 'WR' = world record, 'NR' = national record, continental records are 'ER' (Europe), 'NAR' (North America), 'SAR' (South America), 'AsR' (Asia), 'AfR' (Africa), 'OcR' (Oceania). Use these columns for questions about records set or held
 - NAMES: person names may include a parenthesized local-script form (e.g. "Ken'ichi Ueno (上野健一)"). Always match names fuzzily: WHERE p.name LIKE '%Max Park%'
 - COUNTRIES: country_id values are English country names ('China', 'Germany', 'United Kingdom'), except the United States which is 'USA'. When unsure of the exact id, join the countries table and match countries.name or countries.iso2
+- CONTINENTS: countries.continent_id values are '_Africa', '_Asia', '_Europe', '_North America', '_Oceania', '_South America' (note the leading underscore)
 - DATES: competitions store dates as integer columns year/month/day (start) and end_year/end_month/end_day — there is no DATE column. cancelled = 1 marks cancelled competitions; exclude them by default
 - ROUNDS: round_type_id 'f' = Final and 'c' = Combined Final (treat both as finals); '1'/'2'/'3' = numbered rounds, 'd'/'e'/'g' = combined rounds, '0'/'h' = qualification, 'b' = B final
 - Individual solve attempt values are in result_attempts, NOT in the results table. Join on result_attempts.result_id = results.id
@@ -122,21 +125,38 @@ EXAMPLE QUERIES:
 World record for 3x3 single:
 SELECT p.name, r.best, r.world_rank, p.country_id
 FROM ranks_single r
-JOIN persons p ON r.person_id = p.wca_id
+JOIN persons p ON r.person_id = p.wca_id AND p.sub_id = 1
 WHERE r.event_id = '333' AND r.world_rank = 1
 
 World record for 3x3 average:
 SELECT p.name, r.best, r.world_rank, p.country_id
 FROM ranks_average r
-JOIN persons p ON r.person_id = p.wca_id
+JOIN persons p ON r.person_id = p.wca_id AND p.sub_id = 1
 WHERE r.event_id = '333' AND r.world_rank = 1
 
 Top 10 fastest 3x3 singles:
 SELECT p.name, r.best, r.world_rank, p.country_id
 FROM ranks_single r
-JOIN persons p ON r.person_id = p.wca_id
+JOIN persons p ON r.person_id = p.wca_id AND p.sub_id = 1
 WHERE r.event_id = '333'
 ORDER BY r.world_rank ASC
+LIMIT 10
+
+Top 10 ranked 3x3 averages in the USA:
+SELECT p.name, r.best, r.country_rank, r.world_rank
+FROM ranks_average r
+JOIN persons p ON r.person_id = p.wca_id AND p.sub_id = 1
+WHERE r.event_id = '333' AND p.country_id = 'USA' AND r.country_rank > 0
+ORDER BY r.country_rank ASC
+LIMIT 10
+
+Top 10 ranked 4x4 singles in Europe:
+SELECT p.name, p.country_id, r.best, r.continent_rank, r.world_rank
+FROM ranks_single r
+JOIN persons p ON r.person_id = p.wca_id AND p.sub_id = 1
+JOIN countries c ON p.country_id = c.id
+WHERE r.event_id = '444' AND c.continent_id = '_Europe' AND r.continent_rank > 0
+ORDER BY r.continent_rank ASC
 LIMIT 10
 
 Competition results for a specific event:
@@ -171,7 +191,7 @@ LIMIT 10
 A specific person's best 3x3 time (fuzzy name match):
 SELECT p.name, r.best, r.world_rank, p.country_id
 FROM ranks_single r
-JOIN persons p ON r.person_id = p.wca_id
+JOIN persons p ON r.person_id = p.wca_id AND p.sub_id = 1
 WHERE p.name LIKE '%Max Park%' AND r.event_id = '333'
 
 Competitions held in the United States in 2025:

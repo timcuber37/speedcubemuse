@@ -1,8 +1,10 @@
 """Reload TiDB Serverless with the latest WCA data export.
 
 Downloads the WCA TSV export (data) and SQL export (schema), then
-drops/recreates and bulk-loads every table. Skips if the database is
-already on the latest export date.
+drops/recreates and bulk-loads every table. Then it rebuilds the Guess the Cuber
+matrix (`cuber_profiles`) from the same TSV export. It skips whichever of the
+two is already on the latest export, so a run after a failed rebuild only
+redoes the rebuild. A failed rebuild fails the run.
 
 On success it records the export date and row-count stats in the `site_meta`
 table, which is what the web app renders on its home and About pages — so a
@@ -19,7 +21,7 @@ row-by-row path, which is also the automatic fallback if LOAD DATA errors.
 
 Usage:
     python scripts/update_database.py                 # skip if already up to date
-    python scripts/update_database.py --force         # reload regardless
+    python scripts/update_database.py --force         # reload and rebuild regardless
     python scripts/update_database.py --patch-repo    # also rewrite README stats
     python scripts/update_database.py --no-fast-load  # strict row-by-row load
 """
@@ -36,7 +38,6 @@ from pathlib import Path
 
 import certifi
 import pymysql
-import requests
 from dotenv import load_dotenv
 
 _HERE = Path(__file__).parent
@@ -49,11 +50,12 @@ load_dotenv()
 from config import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, DB_SSL
 from services import site_meta
 import build_cuber_profiles
+import wca_export
+from wca_export import download, table_name_from_tsv
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
 log = logging.getLogger(__name__)
 
-WCA_EXPORT_API = "https://www.worldcubeassociation.org/api/v0/export/public"
 STATE_FILE = _HERE / ".last_export_date"
 
 # Rows per INSERT batch — large enough to be fast, small enough to avoid timeouts
@@ -103,23 +105,6 @@ def get_connection() -> pymysql.Connection:
     )
 
 
-def download(url: str, label: str) -> bytes:
-    log.info("Downloading %s ...", label)
-    resp = requests.get(url, stream=True, timeout=600)
-    resp.raise_for_status()
-    total = int(resp.headers.get('content-length', 0))
-    buf = bytearray()
-    for chunk in resp.iter_content(chunk_size=1024 * 1024):
-        buf.extend(chunk)
-        if total:
-            pct = len(buf) * 100 // total
-            print(f"\r  {pct:3d}%  {len(buf) // 1_048_576} / {total // 1_048_576} MB",
-                  end='', flush=True)
-    print()
-    log.info("  Downloaded %d MB", len(buf) // 1_048_576)
-    return bytes(buf)
-
-
 def parse_create_statements(sql_text: str) -> dict[str, str]:
     """Return {table_name: CREATE TABLE ...;} from a MySQL dump."""
     pattern = re.compile(
@@ -127,13 +112,6 @@ def parse_create_statements(sql_text: str) -> dict[str, str]:
         re.DOTALL | re.IGNORECASE,
     )
     return {m.group(2): m.group(1) for m in pattern.finditer(sql_text)}
-
-
-def table_name_from_tsv(filename: str) -> str:
-    """'WCA_export_Results.tsv' → 'Results'"""
-    name = Path(filename).name          # strip any directory prefix
-    name = re.sub(r'^WCA_export_', '', name)
-    return name.removesuffix('.tsv')
 
 
 # ---------------------------------------------------------------------------
@@ -448,40 +426,80 @@ def last_loaded_export_date() -> str:
     return STATE_FILE.read_text().strip() if STATE_FILE.exists() else ''
 
 
+def last_profiles_export_date() -> str | None:
+    """The export the published Guess the Cuber matrix was built from.
+
+    None when it can't be told, including for a matrix published before the
+    marker carried the date. That reads as stale, so the next run rebuilds it.
+    """
+    try:
+        conn = get_connection()
+        try:
+            return site_meta.read_game_profiles_export_date(conn)
+        finally:
+            conn.close()
+    except Exception as e:
+        log.warning("Could not read the game profiles' export date: %s", e)
+        return None
+
+
 def run(force: bool = False, patch_repo: bool = False, fast_load: bool = True,
         build_profiles: bool = True) -> None:
-    # Check for a newer export
+    """Bring the WCA tables and the game matrix up to the latest export.
+
+    The two are checked separately. A failed matrix rebuild used to be logged
+    and swallowed, which left the game a month stale while every run reported
+    success. Now it fails the run, and because the matrix's marker still names
+    the older export, the next run rebuilds it from the export even though the
+    WCA tables are already current.
+    """
     log.info("Fetching export metadata from WCA API...")
-    meta_resp = requests.get(WCA_EXPORT_API, timeout=30)
-    meta_resp.raise_for_status()
-    meta = meta_resp.json()
-
-    # The API may return 'export_date' as ISO datetime — take the date part
-    export_date = (meta.get('export_date') or '')[:10]
+    meta = wca_export.fetch_metadata()
+    export_date = wca_export.export_date(meta)
     last_loaded = last_loaded_export_date()
-
     log.info("Latest export: %s  |  Last loaded: %s", export_date, last_loaded or 'never')
 
-    if not force and export_date and export_date == last_loaded:
+    reload = force or not (export_date and export_date == last_loaded)
+    rebuild = False
+    if build_profiles:
+        profiles_from = last_profiles_export_date()
+        rebuild = force or profiles_from != export_date
+        log.info("Game profiles built from: %s", profiles_from or 'unknown')
+
+    if not reload and not rebuild:
         log.info("Already up to date. Run with --force to reload anyway.")
         return
 
-    # Resolve download URLs (field names may vary; try common variants)
-    def _find_url(keys: list[str]) -> str | None:
-        for k in keys:
-            if meta.get(k):
-                return meta[k]
-        return None
-
-    tsv_url = _find_url(['tsv_url', 'tsv_zip_url', 'tsv_download_url'])
-    sql_url = _find_url(['sql_url', 'sql_zip_url', 'sql_download_url'])
-
+    tsv_url = wca_export.tsv_url(meta)
     if not tsv_url:
         log.error("Could not find TSV download URL in API response: %s", list(meta.keys()))
         sys.exit(1)
-
-    # Download
     tsv_zip = download(tsv_url, 'TSV export')
+
+    if reload:
+        reload_tables(meta, tsv_zip, export_date, fast_load=fast_load,
+                      patch_repo=patch_repo)
+    else:
+        log.info("WCA tables are already on the %s export; only the game "
+                 "profiles need rebuilding.", export_date)
+
+    if rebuild:
+        # Built from the export files, not the tables just loaded: see
+        # build_cuber_profiles.py. Not caught, so a failure fails the job and
+        # the workflow's failure notification fires.
+        log.info("Rebuilding cuber_profiles for Guess the Cuber...")
+        try:
+            build_cuber_profiles.run(export=tsv_zip, export_date=export_date)
+        except Exception:
+            log.error("cuber_profiles rebuild failed. The WCA tables are loaded; "
+                      "the next run will retry the rebuild.")
+            raise
+
+
+def reload_tables(meta: dict, tsv_zip: bytes, export_date: str,
+                  fast_load: bool = True, patch_repo: bool = False) -> None:
+    """Drop, recreate and bulk-load every table in the export, then publish stats."""
+    sql_url = wca_export.sql_url(meta)
     sql_zip = download(sql_url, 'SQL export') if sql_url else None
 
     # Parse schema from SQL dump
@@ -495,6 +513,7 @@ def run(force: bool = False, patch_repo: bool = False, fast_load: bool = True,
                 log.info("Parsed %d CREATE TABLE statements from SQL dump", len(create_stmts))
             else:
                 log.warning("No .sql file found inside SQL zip")
+        del sql_zip
 
     # Load each TSV into TiDB. Tables are staged to disk one at a time and the
     # staged file is deleted straight after, so peak disk use is the largest
@@ -522,17 +541,6 @@ def run(force: bool = False, patch_repo: bool = False, fast_load: bool = True,
 
     # Query stats and publish them to the site
     print_and_update_stats(export_date, patch_repo=patch_repo)
-
-    # Rebuild the Guess the Cuber feature matrix from the data just loaded.
-    # Isolated in its own try: the reload itself has already succeeded and been
-    # recorded by this point, so a failure here should leave the site serving
-    # fresh WCA data with a stale game pool rather than fail the whole job.
-    if build_profiles:
-        try:
-            log.info("Rebuilding cuber_profiles for Guess the Cuber...")
-            build_cuber_profiles.run()
-        except Exception as e:
-            log.error("cuber_profiles rebuild failed (WCA data is still loaded): %s", e)
 
 
 def print_and_update_stats(export_date: str, patch_repo: bool = False) -> None:

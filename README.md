@@ -106,7 +106,7 @@ language model, and this works the same way.
 
 `scripts/build_cuber_profiles.py` precomputes ~37 attributes for **every WCA
 competitor** into a `cuber_profiles` table during each scheduled refresh — all
-~297,000 of them. A `fame` score (records, World Championship podiums, recency,
+~300,000 of them, computed from the export files on the refresh job's runner. A `fame` score (records, World Championship podiums, recency,
 result volume) ranks the ~2,100 who have held a continental record or better or
 sit in a current world top 100, and those form the first three tiers.
 
@@ -212,6 +212,32 @@ no, every other value of a decided categorical, event groups implied by a member
 in `Attribute.implies` walked transitively in both directions. That took implied
 questions to 0% and cut the median Everyone game from 46 questions to 26, with
 accuracy unchanged.
+
+That first version only reasoned within one attribute, and attributes overlap
+with each other. A recorded 39-question game repeated itself 17 times:
+"strongest event 3x3" followed by "primarily a one-handed solver?", "not world
+top 100 in anything" followed by six questions about top 100 in specific events,
+"represents the USA" followed by "from North America?". Those relations are now
+declared as clauses in `attributes.RELATIONS`, plus country to continent, which
+`pool_relations()` reads from the data. `services/game/knowledge.py` turns the
+answer log into known truth values and applies the clauses by unit propagation,
+so chains follow automatically: USA, so North America, so not Europe, so not
+Germany. All 17 repeats in that game are now settled before they would be asked.
+On the Everyone pool, truthful self-play games got shorter (median 24 questions
+to 20, p95 31 to 25) with the same outcomes.
+
+Every relation must hold for every cuber, or a cuber's game skips a question
+with a wrong "known" answer. `test_every_relation_holds_for_every_profile`
+checks each clause against the full table on every run.
+
+The cost is in error recovery. The engine used to catch some wrong answers by
+re-asking the same fact in other words, which the noise model rewards. With 10%
+of answers flipped at random, it now names the correct cuber less often (Hard
+pool: 82% to 76%), and the leader is the right cuber less often (89% to 85%).
+The right cuber reaches the shortlist about as often as before (96%). Real
+mistakes are usually consistent rather than random: a player who wrongly says
+"USA" will also say "North America". So in real games re-asking helps less than
+this simulation, which flips each answer independently, suggests.
 
 Related questions can also overlap without being logically equivalent. Debut
 year and career length cover much of the same ground, as do last competition
@@ -367,6 +393,7 @@ wca_statbot/
 │   └── game/               # Guess the Cuber
 │       ├── attributes.py       # Attribute schema — single source of truth
 │       ├── engine.py           # Bayesian filter + information-gain picker
+│       ├── knowledge.py        # What the answer log settles (no repeat questions)
 │       ├── profiles.py         # cuber_profiles read path + process cache
 │       ├── question_parser.py  # Free text -> predicate (the only model call)
 │       ├── tokens.py           # Fernet-sealed secrets for solo games
@@ -381,11 +408,14 @@ wca_statbot/
 │   └── style.css           # Styles
 ├── scripts/
 │   ├── update_database.py       # Download and reload WCA data export into TiDB
-│   └── build_cuber_profiles.py  # Build the Guess the Cuber feature matrix
+│   ├── build_cuber_profiles.py  # Build the Guess the Cuber matrix from the export
+│   └── wca_export.py            # Download and read the WCA export (shared by both)
 ├── tests/
 │   ├── test_database.py       # Integration tests for database integrity
 │   ├── test_game_profiles.py  # Feature-matrix integrity
 │   ├── test_game_engine.py    # Engine unit tests + self-play quality gate
+│   ├── test_game_knowledge.py # Cross-attribute relations (offline)
+│   ├── test_profile_build.py  # Building profiles from the export (offline)
 │   └── test_game_api.py       # Token sealing + model-output validation
 ├── .github/
 │   └── workflows/
@@ -531,17 +561,33 @@ Runs automatically at the end of `update_database.py`; these are for running it
 by hand:
 
 ```bash
-python scripts/build_cuber_profiles.py             # build and write
-python scripts/build_cuber_profiles.py --dry-run   # report only, no writes
-python scripts/update_database.py --skip-profiles  # reload WCA data, skip the rebuild
+python scripts/build_cuber_profiles.py                     # download the latest export, build, write
+python scripts/build_cuber_profiles.py --export tsv.zip    # build from an export you already have
+python scripts/build_cuber_profiles.py --dry-run           # report only; never touches the database
+python scripts/update_database.py --skip-profiles          # reload WCA data, skip the rebuild
 ```
+
+The build reads the WCA TSV export directly rather than the tables loaded into
+TiDB. It makes one streaming pass over `results` and one over each rank table,
+and only the finished ~25 MB of profiles goes to the database. As SQL inside
+TiDB the same work took about 3 minutes and, on 2026-11-01, was cancelled for
+exceeding the server's memory limit. In Python it takes about 20 seconds and
+1.4 GB of memory.
+
+The rows are written to `cuber_profiles_next` and swapped in with one atomic
+`RENAME TABLE`, so the app never reads an empty or half-written table. A
+staging table with the wrong row count is never swapped in.
+
+"Competed in every current event" checks the 17 official events listed in
+`CURRENT_EVENTS` (`services/game/attributes.py`). The export already lists FTO
+as live, so add `'fto'` there once it becomes official.
 
 `--dry-run` prints the pool size, the tier split, and per-attribute balance. Read
 the balance column: a boolean true for under 5% or over 95% of the pool barely
 ever splits candidates, and a numeric threshold nothing meets is dead weight.
-Retune `thresholds` in `services/game/attributes.py` and re-run — the build takes
-about 90 seconds; it profiles every competitor, not just the ranked ones. `tests/test_game_profiles.py` asserts both conditions so a
-retuned threshold can't silently rot later.
+Retune `thresholds` in `services/game/attributes.py` and re-run with
+`--export` to skip the 386 MB download. `tests/test_game_profiles.py` asserts
+both conditions so a retuned threshold can't silently rot later.
 
 Head-to-head additionally needs `supabase_game_setup.sql` run once in the
 Supabase SQL Editor; the other two modes work without it.
@@ -643,6 +689,13 @@ Existing secrets stay in place; only supply values you need to add or change.
 each month at 09:00 UTC (also runnable on demand from the Actions tab, with an optional
 `force` input). It writes only to TiDB — no commit, no redeploy — because the
 site reads its stats from the `site_meta` table at render time.
+
+The same run rebuilds the Guess the Cuber matrix from the downloaded export, on
+the runner itself. A failed rebuild fails the run, so the Discord ping fires. The
+`cuber_profiles` generation marker records which export the matrix came from,
+so the next run rebuilds a stale matrix even when the WCA tables are already
+current. (Until November 2026 a failed rebuild was only logged, and the game
+quietly served month-old profiles.)
 
 Required repository secrets: `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`
 (plus optional `DB_PORT`, defaulting to `4000`, and `DISCORD_WEBHOOK_URL` to get

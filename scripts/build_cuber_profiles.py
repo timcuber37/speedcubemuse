@@ -1,29 +1,29 @@
 """Build the `cuber_profiles` feature matrix that Guess the Cuber plays over.
 
-Runs weekly, right after `update_database.py` reloads the WCA export. Everything
-the game knows about a cuber is computed here and stored as one JSON blob per
-person, so a turn of the game never touches `results` (6.7M rows) — it reads a
-few thousand precomputed rows and does arithmetic.
+Runs on every scheduled refresh, right after `update_database.py` reloads the
+WCA export. Everything the game knows about a cuber is computed here and stored
+as one JSON blob per person, so a turn of the game never touches `results` (7M
+rows). It reads precomputed rows and does arithmetic.
 
-Eligibility, per the feature spec: anyone who has held a continental record or
-better, or who is currently in the world top 100 for any event.
-
-Every attribute is computed with a handful of GROUP BY aggregates over the whole
-pool at once. Resist the urge to add a per-person query — the pool is a few
-thousand people and a per-person round trip to TiDB would turn a two-minute job
-into an hour.
+The attributes are computed from the export files themselves, not from the
+tables loaded into TiDB: one streaming pass over `results`, one over each rank
+table, and small lookups for people, competitions, countries and events. That
+takes a minute or two on the machine running the job and needs a few GB of
+memory. The database only receives the finished ~25 MB of profiles. The note
+that opens Steps 1 and 2 explains why this moved out of TiDB.
 
 Usage:
-    python scripts/build_cuber_profiles.py            # build and write
-    python scripts/build_cuber_profiles.py --dry-run  # report only, no writes
+    python scripts/build_cuber_profiles.py                    # download, build, write
+    python scripts/build_cuber_profiles.py --export tsv.zip   # build from a local export
+    python scripts/build_cuber_profiles.py --dry-run          # report only, no DB at all
 """
 import argparse
 import json
 import logging
 import math
+import re
 import ssl
 import sys
-import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -33,13 +33,16 @@ from dotenv import load_dotenv
 
 _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent))
+sys.path.insert(0, str(_HERE))
 
 load_dotenv()
 
 from config import DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME, DB_SSL  # noqa: E402
 from services import site_meta  # noqa: E402
-from services.game.attributes import (ATTRIBUTES, EVENT_GROUPS,  # noqa: E402
-                                      event_weight, group_of)
+from services.game.attributes import (ATTRIBUTES, CURRENT_EVENTS,  # noqa: E402
+                                      EVENT_GROUPS, event_weight, group_of)
+import wca_export  # noqa: E402
+from wca_export import ExportReader  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s  %(message)s')
 log = logging.getLogger('build_cuber_profiles')
@@ -48,10 +51,18 @@ log = logging.getLogger('build_cuber_profiles')
 # does not by itself make someone eligible.
 CONTINENTAL = ('ER', 'NAR', 'SAR', 'AsR', 'AfR', 'OcR')
 
-POOL_TABLE = '_gc_pool'
+# The staging table the TiDB version of this build used. A run that failed
+# midway left it behind with ~300k rows, so writing now drops it.
+_LEGACY_POOL_TABLE = '_gc_pool'
+
+# The live table the app reads, and the two names the swap in write_profiles()
+# moves tables through.
+PROFILES_TABLE = 'cuber_profiles'
+_STAGING_TABLE = 'cuber_profiles_next'
+_REPLACED_TABLE = 'cuber_profiles_old'
 
 CREATE_PROFILES_SQL = """
-CREATE TABLE IF NOT EXISTS `cuber_profiles` (
+CREATE TABLE IF NOT EXISTS `{table}` (
   `wca_id`       VARCHAR(10)  NOT NULL PRIMARY KEY,
   `name`         VARCHAR(120) NOT NULL,
   `country_id`   VARCHAR(50),
@@ -131,245 +142,254 @@ def get_connection() -> pymysql.Connection:
     )
 
 
-def _fetch(cur, sql, args=None):
-    cur.execute(sql, args)
-    return cur.fetchall()
-
-
 # ---------------------------------------------------------------------------
-# Step 1 — the eligible pool
+# Steps 1 and 2 — the pool and its attributes, read straight from the export
 # ---------------------------------------------------------------------------
+#
+# These used to be GROUP BY queries inside TiDB, staged through a `_gc_pool`
+# table. That aggregation was the most expensive thing the refresh asked of the
+# database, and on 2026-11-01 one of its queries was cancelled for exceeding the
+# server's memory limit, which left the game serving a month-old matrix. The
+# job's runner already holds the export, so the same rules run here instead and
+# TiDB only receives the finished rows.
+#
+# Each function names the query it replaced, and the semantics carry over
+# exactly, joins included: a result whose competition is missing from
+# `competitions` drops out of every family that joined to it.
 
-def build_pool(cur, current_events: set[str]) -> set[str]:
-    """Stage the profile pool and return the record/top-100 subset.
+_RECORD_CODES = frozenset(('WR', *CONTINENTAL))
+_WORLDS_ID = re.compile(r'WC[0-9]{4}')
 
-    Two groups go in. The *elite* — a continental record or better, or a current
-    world top 100 — are the Easy/Normal/Hard tiers, as before. On top of those
-    come everyone with at least MIN_EVERYONE_COMPS competitions, which is what
-    the "Everyone" tier plays over.
 
-    That threshold is where the data runs out, not an arbitrary line: 155k of
-    WCA's 297k competitors have been to exactly one competition and 50k to two,
-    and those profiles are identical in almost every attribute the game asks
-    about. Including them would mean a pool the search cannot separate.
+def _int(value: str | None) -> int:
+    """A numeric field. NULL or blank reads as 0, as the SQL's `x or 0` did."""
+    return int(value) if value else 0
+
+
+def _min(a: int | None, b: int | None) -> int | None:
+    """MIN() over nullable values: NULLs are ignored unless that's all there is."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return min(a, b)
+
+
+def read_current_events(export: ExportReader) -> set[str]:
+    """The official events the export hasn't retired.
+
+    CURRENT_EVENTS decides what counts as official, so an event the WCA has
+    added to the export but not made official yet (FTO, at the moment) stays
+    out. `rank >= 900` is how the export marks a retired event, so one retired
+    in a future export drops out on its own.
     """
-    cur.execute(f'DROP TABLE IF EXISTS `{POOL_TABLE}`')
-    cur.execute(
-        f'CREATE TABLE `{POOL_TABLE}` (person_id VARCHAR(10) NOT NULL PRIMARY KEY)'
-    )
+    live = {event_id for event_id, rank in export.rows('events', ('id', 'rank'))
+            if rank is not None and int(rank) < 900}
+    return live & set(CURRENT_EVENTS)
 
-    placeholders = ', '.join(['%s'] * len(CONTINENTAL))
-    # One scan of `results` covering both record columns. There is no index on
-    # the record columns, so this is a full scan of 6.8M rows — a minute or so,
-    # and the reason this script is a weekly job rather than a request path.
-    log.info('Scanning results for continental-record-or-better holders...')
-    cur.execute(
-        f'INSERT IGNORE INTO `{POOL_TABLE}` (person_id) '
-        f'SELECT DISTINCT person_id FROM `results` '
-        f'WHERE regional_single_record IN (%s, {placeholders}) '
-        f'   OR regional_average_record IN (%s, {placeholders})',
-        ('WR', *CONTINENTAL, 'WR', *CONTINENTAL),
-    )
-    log.info('  record holders: %d', cur.rowcount)
 
-    # Retired events are excluded here for the same reason they are excluded
-    # from the attributes: a frozen top-100 in an event the WCA no longer runs
-    # is not a current standing. Leaving them in admitted people to the elite
-    # pool who then satisfied none of its own criteria.
-    events_in = ', '.join(['%s'] * len(current_events))
-    ordered = sorted(current_events)
+def read_competitions(export: ExportReader) -> dict[str, tuple[int | None, str | None]]:
+    """Competition id -> (year, country), the two columns the attributes join on."""
+    return {
+        comp_id: (int(year) if year else None, country)
+        for comp_id, year, country in export.rows(
+            'competitions', ('id', 'year', 'country_id'))
+    }
+
+
+def scan_results(export: ExportReader, competitions: dict,
+                 current_events: set[str], current_year: int) -> dict:
+    """Every family that comes from `results`, in one pass over ~7M rows.
+
+    Replaces build_pool's record-holder scan, fetch_records,
+    fetch_weighted_records, fetch_career and fetch_worlds.
+
+    *Records* keep the plain counts the game asks about ("have they set at
+    least 2 world records?"). Those must stay raw — a player answering that
+    question is not thinking about event popularity. *Weighted* records score
+    each WR and CR by event and age, and only feed the fame score that decides
+    difficulty tiers. A single result can be both a single and an average
+    record, and each is its own achievement.
+
+    The oldest rows carry NULL rather than '' in the record columns. The SQL had
+    to COALESCE them, because `NULL IN (...)` is NULL rather than false; that
+    once zeroed out the Asian record of the 1982 competitors.
+
+    World Championship competition ids are WC<year> (WC2003 ... WC2025), which
+    is more dependable than the `championships` table, whose shape nothing else
+    in the app relies on.
+    """
+    record_holders: set[str] = set()
+    records: dict[str, list[int]] = {}
+    weighted: dict[str, dict] = {}
+    # person -> [results, competitions, events, first year, last year, countries]
+    career: dict[str, list] = {}
+    worlds: dict[str, dict] = {}
+
+    columns = ('person_id', 'competition_id', 'event_id', 'round_type_id', 'pos',
+               'best', 'regional_single_record', 'regional_average_record')
+    for pid, comp_id, event_id, round_type, pos, best, single, average in \
+            export.rows('results', columns):
+        single = single or ''
+        average = average or ''
+
+        counts = records.get(pid)
+        if counts is None:
+            counts = records[pid] = [0, 0, 0, 0]
+        counts[0] += single == 'WR'
+        counts[1] += average == 'WR'
+        counts[2] += (single in CONTINENTAL) + (average in CONTINENTAL)
+        counts[3] += (single == 'NR') + (average == 'NR')
+        is_record = single in _RECORD_CODES or average in _RECORD_CODES
+        if is_record:
+            record_holders.add(pid)
+
+        competition = competitions.get(comp_id)
+        if competition is None:
+            continue   # the remaining families joined `competitions`
+        year, country = competition
+
+        acc = career.get(pid)
+        if acc is None:
+            acc = career[pid] = [0, set(), set(), None, None, set()]
+        acc[0] += 1
+        acc[1].add(comp_id)
+        acc[2].add(event_id)
+        acc[3] = _min(acc[3], year)
+        if year is not None:
+            acc[4] = year if acc[4] is None else max(acc[4], year)
+        if country is not None:   # COUNT(DISTINCT ...) skips NULL
+            acc[5].add(country)
+
+        if is_record:
+            weight = event_weight(event_id) * recency_weight(year, current_year)
+            acc = weighted.setdefault(pid, {'_wr_weighted': 0.0, '_cr_weighted': 0.0})
+            for code in (single, average):
+                if code == 'WR':
+                    acc['_wr_weighted'] += weight
+                elif code in CONTINENTAL:
+                    acc['_cr_weighted'] += weight
+
+        if _WORLDS_ID.fullmatch(comp_id):
+            acc = worlds.setdefault(pid, {
+                'competed_at_worlds': True,
+                'has_worlds_podium': False,
+                '_worlds_podiums': 0,
+                '_podium_weighted': 0.0,   # fame inputs, stripped in assemble()
+            })
+            if round_type in ('f', 'c') and 0 < _int(pos) <= 3 and _int(best) > 0:
+                acc['has_worlds_podium'] = True
+                acc['_worlds_podiums'] += 1
+                # A 3x3 Worlds podium is the single most recognizable result in
+                # the sport; a 5BLD one is known to the people who follow 5BLD.
+                acc['_podium_weighted'] += (event_weight(event_id)
+                                            * recency_weight(year, current_year))
+
+    return {
+        'people': set(records),
+        'record_holders': record_holders,
+        'records': {
+            pid: {'wr_single_count': wr_s, 'wr_average_count': wr_a,
+                  'cr_count': cr, 'nr_count': nr}
+            for pid, (wr_s, wr_a, cr, nr) in records.items()
+        },
+        'weighted': weighted,
+        'career': {
+            pid: {
+                'total_results': total,
+                'comp_count': len(comps),
+                'events_competed': len(events),
+                'first_year': first or 0,
+                'last_year': last or 0,
+                'years_active': max(0, (last or 0) - (first or 0)) + 1,
+                'countries_competed_in': len(countries),
+                # Every one of them, not just as many: events_competed also
+                # counts retired events, so 17 distinct events can still be
+                # missing a current one.
+                'competed_all_events': current_events <= events,
+            }
+            for pid, (total, comps, events, first, last, countries) in career.items()
+        },
+        'worlds': worlds,
+    }
+
+
+def scan_ranks(export: ExportReader, current_events: set[str]) -> dict:
+    """Current standings and 3x3 bests, in one pass over each rank table.
+
+    Replaces build_pool's top-100 queries, the UNION ALL in fetch_rankings and
+    fetch_personal_bests. Single and average ranks are combined into each
+    person's best rank per event, ignoring NULLs as MIN() did.
+
+    Retired events don't count toward the top 100 here, for the same reason they
+    are excluded from the attributes: a frozen top-100 in an event the WCA no
+    longer runs is not a current standing.
+    """
+    top100: set[str] = set()
+    ranks: dict[str, dict[str, list]] = {}
+    bests: dict[str, dict[str, int]] = {'ranks_single': {}, 'ranks_average': {}}
+
+    columns = ('person_id', 'event_id', 'best', 'world_rank',
+               'continent_rank', 'country_rank')
     for table in ('ranks_single', 'ranks_average'):
-        cur.execute(
-            f'INSERT IGNORE INTO `{POOL_TABLE}` (person_id) '
-            f'SELECT DISTINCT person_id FROM `{table}` '
-            f'WHERE world_rank <= 100 AND event_id IN ({events_in})',
-            tuple(ordered),
-        )
-        log.info('  + top-100 from %s: %d new', table, cur.rowcount)
+        found = bests[table]
+        for pid, event_id, best, world, continent, country in export.rows(table, columns):
+            if event_id == '333' and _int(best) > 0:
+                found[pid] = _int(best)
 
-    elite = {r[0] for r in _fetch(cur, f'SELECT person_id FROM `{POOL_TABLE}`')}
-    log.info('Elite pool (record / top-100): %d cubers', len(elite))
+            world = _int(world)
+            if world <= 0:
+                continue
+            if world <= 100 and event_id in current_events:
+                top100.add(pid)
 
-    log.info('Adding every remaining competitor...')
-    cur.execute(
-        f'INSERT IGNORE INTO `{POOL_TABLE}` (person_id) '
-        f'SELECT DISTINCT person_id FROM `results`'
-    )
-    total = _fetch(cur, f'SELECT COUNT(*) FROM `{POOL_TABLE}`')[0][0]
-    log.info('Full profile pool: %d cubers', total)
-    return elite
+            continent = int(continent) if continent else None
+            country = int(country) if country else None
+            by_event = ranks.setdefault(pid, {})
+            held = by_event.get(event_id)
+            if held is None:
+                by_event[event_id] = [world, continent, country]
+            else:
+                held[0] = min(held[0], world)
+                held[1] = _min(held[1], continent)
+                held[2] = _min(held[2], country)
+
+    return {'top100': top100, 'ranks': ranks,
+            'singles': bests['ranks_single'], 'averages': bests['ranks_average']}
 
 
-# ---------------------------------------------------------------------------
-# Step 2 — attribute families, one aggregate query each
-# ---------------------------------------------------------------------------
-
-def fetch_identity(cur) -> dict[str, dict]:
+def read_identity(export: ExportReader, pool: set[str]) -> dict[str, dict]:
     """Name, country, continent, gender. sub_id=1 is the person's current identity."""
-    rows = _fetch(cur, f"""
-        SELECT p.wca_id, p.name, p.country_id, p.gender, c.continent_id
-          FROM `persons` p
-          JOIN `{POOL_TABLE}` g ON p.wca_id = g.person_id
-          LEFT JOIN `countries` c ON p.country_id = c.id
-         WHERE p.sub_id = 1
-    """)
+    continents = dict(export.rows('countries', ('id', 'continent_id')))
     return {
         wca_id: {
             'name': name,
             'country_id': country,
-            'continent_id': continent,
+            'continent_id': continents.get(country),
             'gender': (gender or '').strip().lower() or None,
         }
-        for wca_id, name, country, gender, continent in rows
+        for wca_id, sub_id, name, country, gender in export.rows(
+            'persons', ('wca_id', 'sub_id', 'name', 'country_id', 'gender'))
+        if _int(sub_id) == 1 and wca_id in pool
     }
 
 
-def fetch_records(cur) -> dict[str, dict]:
-    """World / continental / national record counts.
-
-    Every record column is COALESCEd before comparison. The export writes NULL
-    rather than '' in the oldest rows, and `NULL IN (...)` is NULL, not false —
-    so `SUM(a) + SUM(b)` silently collapses to NULL for anyone whose results
-    are all-NULL in one column. That zeroed out the Asian record of the 1982
-    competitors and dropped them out of their own eligibility criterion.
-    """
-    cont = ', '.join(['%s'] * len(CONTINENTAL))
-    rows = _fetch(cur, f"""
-        SELECT r.person_id,
-               SUM(COALESCE(r.regional_single_record,  '') = 'WR'),
-               SUM(COALESCE(r.regional_average_record, '') = 'WR'),
-               SUM(COALESCE(r.regional_single_record,  '') IN ({cont}))
-             + SUM(COALESCE(r.regional_average_record, '') IN ({cont})),
-               SUM(COALESCE(r.regional_single_record,  '') = 'NR')
-             + SUM(COALESCE(r.regional_average_record, '') = 'NR')
-          FROM `results` r
-          JOIN `{POOL_TABLE}` g ON r.person_id = g.person_id
-         GROUP BY r.person_id
-    """, (*CONTINENTAL, *CONTINENTAL))
-    return {
-        pid: {
-            'wr_single_count': int(wr_s or 0),
-            'wr_average_count': int(wr_a or 0),
-            'cr_count': int(cr or 0),
-            'nr_count': int(nr or 0),
-        }
-        for pid, wr_s, wr_a, cr, nr in rows
-    }
-
-
-def fetch_weighted_records(cur, current_year: int) -> dict[str, dict]:
-    """Records scored by which event they were set in and how long ago.
-
-    Separate from `fetch_records`, which keeps the plain counts the *game* asks
-    about ("have they set at least 2 world records?"). Those must stay raw — a
-    player answering that question is not thinking about event popularity. Only
-    the fame score, which decides difficulty tiers, is weighted.
-
-    Only WR and CR rows are read here, so this is ~5k rows rather than the full
-    record set, and weighting them in Python keeps the tiers legible and
-    tunable instead of buried in a SQL CASE ladder.
-    """
-    cont = ', '.join(['%s'] * len(CONTINENTAL))
-    rows = _fetch(cur, f"""
-        SELECT r.person_id, r.event_id, c.year,
-               COALESCE(r.regional_single_record,  ''),
-               COALESCE(r.regional_average_record, '')
-          FROM `results` r
-          JOIN `{POOL_TABLE}` g ON r.person_id = g.person_id
-          JOIN `competitions` c ON r.competition_id = c.id
-         WHERE COALESCE(r.regional_single_record,  '') IN (%s, {cont})
-            OR COALESCE(r.regional_average_record, '') IN (%s, {cont})
-    """, ('WR', *CONTINENTAL, 'WR', *CONTINENTAL))
-
-    out: dict[str, dict] = {}
-    for person_id, event_id, year, single, average in rows:
-        weight = event_weight(event_id) * recency_weight(year, current_year)
-        acc = out.setdefault(person_id, {'_wr_weighted': 0.0, '_cr_weighted': 0.0})
-        # A single result can be both a single and an average record, and each
-        # is its own achievement.
-        for code in (single, average):
-            if code == 'WR':
-                acc['_wr_weighted'] += weight
-            elif code in CONTINENTAL:
-                acc['_cr_weighted'] += weight
-    return out
-
-
-def fetch_career(cur) -> dict[str, dict]:
-    """Volume and era: competitions, events, years, countries travelled to."""
-    rows = _fetch(cur, f"""
-        SELECT r.person_id,
-               COUNT(*),
-               COUNT(DISTINCT r.competition_id),
-               COUNT(DISTINCT r.event_id),
-               MIN(c.year), MAX(c.year),
-               COUNT(DISTINCT c.country_id)
-          FROM `results` r
-          JOIN `{POOL_TABLE}` g ON r.person_id = g.person_id
-          JOIN `competitions` c ON r.competition_id = c.id
-         GROUP BY r.person_id
-    """)
-    return {
-        pid: {
-            'total_results': int(total or 0),
-            'comp_count': int(comps or 0),
-            'events_competed': int(events or 0),
-            'first_year': int(first or 0),
-            'last_year': int(last or 0),
-            'years_active': max(0, int(last or 0) - int(first or 0)) + 1,
-            'countries_competed_in': int(countries or 0),
-        }
-        for pid, total, comps, events, first, last, countries in rows
-    }
-
-
-def fetch_current_events(cur) -> set[str]:
-    """Event ids the WCA still runs.
-
-    `rank >= 900` is how the export marks a retired event, and the same test
-    already produces the "17 events" figure on the About page. Reading it rather
-    than hardcoding a list means an event retired in a future export drops out
-    on its own.
-    """
-    rows = _fetch(cur, 'SELECT id FROM `events` WHERE `rank` < 900')
-    return {r[0] for r in rows}
-
-
-def fetch_rankings(cur, current_events: set[str]) -> dict[str, dict]:
+def rankings_from(ranks: dict[str, dict[str, list]],
+                  current_events: set[str]) -> dict[str, dict]:
     """Current world ranks, collapsed to the facts the game asks about.
 
-    Single and average ranks are unioned and reduced to each person's best rank
-    per event. A top-100 single OR average qualifies for that event; a person
-    in both rankings still contributes only one event to top100_event_count.
+    A top-100 single OR average qualifies for that event; a person in both
+    rankings still contributes only one event to top100_event_count.
 
     Continent and country ranks come along for the "currently holds a record"
     attributes. The record hierarchy needs no special handling here: rank 1 in
     the world is necessarily rank 1 in your continent and your country, so
     `continent_rank = 1` already means "continental record or better".
     """
-    rows = _fetch(cur, f"""
-        SELECT u.person_id, u.event_id,
-               MIN(u.world_rank), MIN(u.continent_rank), MIN(u.country_rank)
-          FROM (
-                SELECT person_id, event_id, world_rank, continent_rank, country_rank
-                  FROM `ranks_single`
-                 UNION ALL
-                SELECT person_id, event_id, world_rank, continent_rank, country_rank
-                  FROM `ranks_average`
-               ) u
-          JOIN `{POOL_TABLE}` g ON u.person_id = g.person_id
-         WHERE u.world_rank > 0
-         GROUP BY u.person_id, u.event_id
-    """)
-
-    by_person: dict[str, list[tuple]] = {}
-    for pid, event_id, world, continent, country in rows:
-        by_person.setdefault(pid, []).append(
-            (event_id, int(world), int(continent or 0), int(country or 0))
-        )
-
     out = {}
-    for pid, all_ranks in by_person.items():
+    for pid, by_event in ranks.items():
+        all_ranks = [(event_id, world, continent or 0, country or 0)
+                     for event_id, (world, continent, country) in by_event.items()]
         # Retired events are dropped before anything here is derived. Every
         # attribute below is a claim about the present — "currently top 100",
         # "currently holds a world record" — and a frozen ranking in an event
@@ -377,31 +397,31 @@ def fetch_rankings(cur, current_events: set[str]) -> dict[str, dict]:
         # ever competed in those events, their ranks are often a person's
         # numerically best: Erik Akkersdijk came out as a Multi-Blind (old
         # style) specialist, and 26% of the elite pool led with a dead event.
-        ranks = [r for r in all_ranks if r[0] in current_events]
+        current = [r for r in all_ranks if r[0] in current_events]
 
         best_event, best_rank = (
-            min(((e, w) for e, w, _c, _n in ranks), key=lambda er: er[1])
-            if ranks else (None, 10 ** 9)
+            min(((e, w) for e, w, _c, _n in current), key=lambda er: er[1])
+            if current else (None, 10 ** 9)
         )
         group = group_of(best_event) if best_event else None
         out[pid] = {
             'main_event': best_event,
             'main_event_group': group,
-            'top100_events': sorted(e for e, w, _c, _n in ranks if w <= 100),
-            'top100_event_count': sum(1 for _e, w, _c, _n in ranks if w <= 100),
+            'top100_events': sorted(e for e, w, _c, _n in current if w <= 100),
+            'top100_event_count': sum(1 for _e, w, _c, _n in current if w <= 100),
             # Fame input: every current ranking, scored by how high it is and
             # how followed the event is. Kept out of the attributes because
             # top-25 / top-100 / top-500 are nested — offering all three as
             # questions would mean asking "top 100?" after "top 25? yes".
             '_rank_weighted': sum(
-                event_weight(e) * rank_band_weight(w) for e, w, _c, _n in ranks),
+                event_weight(e) * rank_band_weight(w) for e, w, _c, _n in current),
             'top10_any': best_rank <= 10,
             'currently_wr': best_rank == 1,
             # Fame input: how much attention the event they lead actually gets.
             '_current_wr_weight': max(
-                (event_weight(e) for e, w, _c, _n in ranks if w == 1), default=0.0),
-            'currently_cr_or_better': any(c == 1 for _e, _w, c, _n in ranks),
-            'currently_nr_or_better': any(n == 1 for _e, _w, _c, n in ranks),
+                (event_weight(e) for e, w, _c, _n in current if w == 1), default=0.0),
+            'currently_cr_or_better': any(c == 1 for _e, _w, c, _n in current),
+            'currently_nr_or_better': any(n == 1 for _e, _w, _c, n in current),
             'is_bld_specialist': best_event in EVENT_GROUPS['blind_events'],
             'is_bigcube_specialist': best_event in EVENT_GROUPS['big_cubes'],
             'is_sideevent_specialist': best_event in EVENT_GROUPS['side_events'],
@@ -411,69 +431,64 @@ def fetch_rankings(cur, current_events: set[str]) -> dict[str, dict]:
     return out
 
 
-def fetch_personal_bests(cur) -> dict[str, dict]:
+def personal_bests_from(singles: dict[str, int],
+                        averages: dict[str, int]) -> dict[str, dict]:
     """3x3 milestones. `best` is centiseconds, so sub-10 is < 1000."""
-    singles = dict(_fetch(cur, f"""
-        SELECT rs.person_id, rs.best FROM `ranks_single` rs
-          JOIN `{POOL_TABLE}` g ON rs.person_id = g.person_id
-         WHERE rs.event_id = '333' AND rs.best > 0
-    """))
-    averages = dict(_fetch(cur, f"""
-        SELECT ra.person_id, ra.best FROM `ranks_average` ra
-          JOIN `{POOL_TABLE}` g ON ra.person_id = g.person_id
-         WHERE ra.event_id = '333' AND ra.best > 0
-    """))
-    ids = set(singles) | set(averages)
     return {
         pid: {
             'sub10_333_single': 0 < singles.get(pid, 0) < 1000,
             'sub6_333_single': 0 < singles.get(pid, 0) < 600,
             'sub10_333_average': 0 < averages.get(pid, 0) < 1000,
         }
-        for pid in ids
+        for pid in set(singles) | set(averages)
     }
 
 
-def fetch_worlds(cur, current_year: int) -> dict[str, dict]:
-    """World Championship appearances and podiums.
+def compute_sources(export: ExportReader,
+                    current_year: int) -> tuple[dict[str, dict], set[str]]:
+    """Every attribute family, and the elite subset of the pool.
 
-    World Championship competition ids are WC<year> (WC2003 ... WC2025), which
-    is more dependable here than the `championships` table — that table is
-    loaded by the refresh job but nothing else in the app reads it, so its shape
-    is unverified.
+    The pool is every competitor with a result, plus the elite: a continental
+    record or better, or a current world top 100. The elite are the
+    Easy/Normal/Hard tiers; everyone with MIN_EVERYONE_COMPS or more
+    competitions is the "Everyone" tier.
+
+    That threshold is where the data runs out, not an arbitrary line: about half
+    of WCA's competitors have been to exactly one competition, and those
+    profiles are identical in almost every attribute the game asks about.
     """
-    rows = _fetch(cur, f"""
-        SELECT r.person_id, r.event_id, c.year, r.round_type_id, r.pos, r.best
-          FROM `results` r
-          JOIN `{POOL_TABLE}` g ON r.person_id = g.person_id
-          JOIN `competitions` c ON r.competition_id = c.id
-         WHERE r.competition_id REGEXP '^WC[0-9]{{4}}$'
-    """)
+    current_events = read_current_events(export)
+    competitions = read_competitions(export)
 
-    out: dict[str, dict] = {}
-    for person_id, event_id, year, round_type, pos, best in rows:
-        acc = out.setdefault(person_id, {
-            'competed_at_worlds': True,
-            'has_worlds_podium': False,
-            '_worlds_podiums': 0,
-            '_podium_weighted': 0.0,   # fame inputs, stripped in assemble()
-        })
-        if round_type in ('f', 'c') and (pos or 0) <= 3 and (pos or 0) > 0 \
-                and (best or 0) > 0:
-            acc['has_worlds_podium'] = True
-            acc['_worlds_podiums'] += 1
-            # A 3x3 Worlds podium is the single most recognizable result in the
-            # sport; a 5BLD one is known to the people who follow 5BLD.
-            acc['_podium_weighted'] += (event_weight(event_id)
-                                        * recency_weight(year, current_year))
-    return out
+    log.info('Scanning results...')
+    results = scan_results(export, competitions, current_events, current_year)
+    log.info('Scanning rankings...')
+    standings = scan_ranks(export, current_events)
+
+    elite = results['record_holders'] | standings['top100']
+    log.info('Elite pool (record / top-100): %d cubers', len(elite))
+    pool = results['people'] | elite
+    log.info('Full profile pool: %d cubers', len(pool))
+
+    in_pool = lambda d: {pid: v for pid, v in d.items() if pid in pool}  # noqa: E731
+    sources = {
+        'identity': read_identity(export, pool),
+        'records': results['records'],
+        'career': results['career'],
+        'rankings': rankings_from(in_pool(standings['ranks']), current_events),
+        'bests': personal_bests_from(in_pool(standings['singles']),
+                                     in_pool(standings['averages'])),
+        'worlds': results['worlds'],
+        'weighted': results['weighted'],
+    }
+    return sources, elite
 
 
 # ---------------------------------------------------------------------------
 # Step 3 — assemble, score, tier
 # ---------------------------------------------------------------------------
 
-def assemble(sources: dict[str, dict[str, dict]], total_events: int,
+def assemble(sources: dict[str, dict[str, dict]],
              elite: set[str]) -> list[dict]:
     """Merge the attribute families into one row per cuber."""
     identity = sources['identity']
@@ -507,7 +522,6 @@ def assemble(sources: dict[str, dict[str, dict]], total_events: int,
         attrs['has_nr_or_better'] = (wr + cr + nr) > 0
 
         attrs['is_active'] = attrs.get('last_year', 0) >= current_year - 1
-        attrs['competed_all_events'] = attrs.get('events_competed', 0) >= total_events
 
         # Fame inputs, not attributes — popped before the schema check below so
         # they never reach the game or the stored blob.
@@ -616,27 +630,53 @@ def assign_tiers(profiles: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 
 def write_profiles(conn, profiles: list[dict]) -> None:
-    cur = conn.cursor()
-    cur.execute(CREATE_PROFILES_SQL)
-    # TRUNCATE rather than DELETE: DELETE is billed as a write for each of the
-    # ~297k rows and their index entries, while TRUNCATE swaps in an empty
-    # table for almost nothing. The connection is autocommit, so DELETE gave
-    # no atomicity that TRUNCATE gives up.
-    cur.execute('TRUNCATE TABLE `cuber_profiles`')
+    """Write the matrix to a staging table, then swap it in atomically.
 
-    sql = ('INSERT INTO `cuber_profiles` '
-           '(wca_id, name, country_id, continent_id, fame, tier, attrs) '
-           'VALUES (%s, %s, %s, %s, %s, %s, %s)')
-    batch, size = [], 500
-    for p in profiles:
-        batch.append((p['wca_id'], p['name'], p['country_id'], p['continent_id'],
-                      p['fame'], p['tier'], json.dumps(p['attrs'])))
-        if len(batch) >= size:
+    Refilling `cuber_profiles` in place (TRUNCATE, then ~600 batched INSERTs)
+    left a minute or two when it was empty or half written. A web worker that
+    loaded profiles then, on a cold start for instance, would cache a partial
+    pool for up to an hour. The rows now go into a staging table, which a single
+    multi-table RENAME TABLE swaps in. TiDB performs that rename atomically, so
+    a reader sees the old table or the new one, never a gap or a partial one.
+
+    A staging table that comes up short is never swapped in: the old matrix
+    stays live and the error fails the run. DROP TABLE is as cheap as the
+    TRUNCATE it replaces; DELETE would have been billed per row.
+    """
+    cur = conn.cursor()
+    try:
+        # Leftovers from a run that failed partway.
+        cur.execute(f'DROP TABLE IF EXISTS `{_STAGING_TABLE}`')
+        cur.execute(f'DROP TABLE IF EXISTS `{_REPLACED_TABLE}`')
+        cur.execute(CREATE_PROFILES_SQL.format(table=_STAGING_TABLE))
+
+        sql = (f'INSERT INTO `{_STAGING_TABLE}` '
+               '(wca_id, name, country_id, continent_id, fame, tier, attrs) '
+               'VALUES (%s, %s, %s, %s, %s, %s, %s)')
+        batch, size = [], 500
+        for p in profiles:
+            batch.append((p['wca_id'], p['name'], p['country_id'], p['continent_id'],
+                          p['fame'], p['tier'], json.dumps(p['attrs'])))
+            if len(batch) >= size:
+                cur.executemany(sql, batch)
+                batch.clear()
+        if batch:
             cur.executemany(sql, batch)
-            batch.clear()
-    if batch:
-        cur.executemany(sql, batch)
-    cur.close()
+
+        cur.execute(f'SELECT COUNT(*) FROM `{_STAGING_TABLE}`')
+        written = cur.fetchone()[0]
+        if written != len(profiles):
+            raise RuntimeError(f'{_STAGING_TABLE} has {written} rows, expected '
+                               f'{len(profiles)}; leaving {PROFILES_TABLE} as it was')
+
+        # The swap needs a live table to move aside, and a first build has none.
+        cur.execute(CREATE_PROFILES_SQL.format(table=PROFILES_TABLE))
+        cur.execute(f'RENAME TABLE `{PROFILES_TABLE}` TO `{_REPLACED_TABLE}`, '
+                    f'`{_STAGING_TABLE}` TO `{PROFILES_TABLE}`')
+        cur.execute(f'DROP TABLE IF EXISTS `{_REPLACED_TABLE}`')
+        cur.execute(f'DROP TABLE IF EXISTS `{_LEGACY_POOL_TABLE}`')
+    finally:
+        cur.close()
     log.info('Wrote %d profiles', len(profiles))
 
 
@@ -700,50 +740,59 @@ def report(profiles: list[dict]) -> None:
     print('=' * 62 + '\n')
 
 
-def run(dry_run: bool = False) -> None:
+def run(export: bytes | str | Path | ExportReader | None = None,
+        dry_run: bool = False, export_date: str | None = None) -> list[dict]:
+    """Build the matrix from a TSV export and, unless `dry_run`, publish it.
+
+    `export` is the TSV export zip, as bytes or a path. Without one, the latest
+    export is downloaded. Any failure raises, so a broken build fails whatever
+    ran it instead of leaving the game on stale profiles unnoticed.
+
+    The published marker records the export's date, read from the zip's own
+    metadata.json. `export_date` is the fallback for a zip without one. An
+    undated matrix looks stale to update_database.py, so every run would
+    rebuild it.
+    """
+    if export is None:
+        meta = wca_export.fetch_metadata()
+        url = wca_export.tsv_url(meta)
+        if not url:
+            raise RuntimeError(f'No TSV download URL in the export API response: {list(meta)}')
+        export = wca_export.download(url, 'TSV export')
+    reader = export if isinstance(export, ExportReader) else ExportReader(export)
+    export_date = reader.export_date() or export_date
+    log.info('Building cuber_profiles from the %s export', export_date or 'undated')
+
+    log.info('Computing attribute families...')
+    sources, elite = compute_sources(reader, datetime.now().year)
+    for name, data in sources.items():
+        log.info('  %-10s %d rows', name, len(data))
+
+    profiles = assemble(sources, elite)
+    assign_tiers(profiles)
+    report(profiles)
+
+    if dry_run:
+        log.info('--dry-run: nothing written')
+        return profiles
+
     conn = get_connection()
     try:
-        cur = conn.cursor()
-        current_events = fetch_current_events(cur)
-        elite = build_pool(cur, current_events)
-
-        total_events = len(current_events)
-
-        current_year = datetime.now().year
-        log.info('Computing attribute families...')
-        sources = {
-            'identity': fetch_identity(cur),
-            'records': fetch_records(cur),
-            'career': fetch_career(cur),
-            'rankings': fetch_rankings(cur, current_events),
-            'bests': fetch_personal_bests(cur),
-            'worlds': fetch_worlds(cur, current_year),
-            'weighted': fetch_weighted_records(cur, current_year),
-        }
-        for name, data in sources.items():
-            log.info('  %-10s %d rows', name, len(data))
-
-        profiles = assemble(sources, total_events, elite)
-        assign_tiers(profiles)
-        report(profiles)
-
-        if dry_run:
-            log.info('--dry-run: nothing written')
-        else:
-            write_profiles(conn, profiles)
-            site_meta.publish_game_profiles_generation(conn, uuid.uuid4().hex)
-
-        cur.execute(f'DROP TABLE IF EXISTS `{POOL_TABLE}`')
-        cur.close()
+        write_profiles(conn, profiles)
+        site_meta.publish_game_profiles_generation(
+            conn, site_meta.game_profiles_generation(export_date))
     finally:
         conn.close()
+    return profiles
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Build the cuber_profiles feature matrix for Guess the Cuber'
     )
+    parser.add_argument('--export', metavar='ZIP',
+                        help='A downloaded WCA TSV export zip (default: download the latest)')
     parser.add_argument('--dry-run', action='store_true',
                         help='Compute and report, but write nothing')
     args = parser.parse_args()
-    run(dry_run=args.dry_run)
+    run(export=args.export, dry_run=args.dry_run)

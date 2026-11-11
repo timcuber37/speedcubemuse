@@ -213,8 +213,9 @@ def test_pinning_a_category_settles_every_other_value(everyone_engine):
         pred_id = Predicate('continent_id', 'eq', other).as_id()
         if pred_id in everyone_engine._by_id:
             assert pred_id in settled, other
-    # A different attribute is untouched.
-    assert not any(s.startswith('country_id:') for s in settled)
+    # Countries outside Europe are settled too. European ones stay open.
+    assert Predicate('country_id', 'eq', 'USA').as_id() in settled
+    assert Predicate('country_id', 'eq', 'Germany').as_id() not in settled
 
 
 def test_ruling_out_one_category_settles_nothing_else(everyone_engine):
@@ -285,6 +286,26 @@ def test_a_settled_question_is_never_asked(everyone_engine):
     assert len(log) > 3, 'game ended too early to prove anything'
 
 
+def test_truthful_answers_settle_only_true_facts(everyone_engine):
+    """Whatever the log settles must be true of the cuber who answered it.
+
+    The other half of never asking a settled question: a relation or a bit of
+    threshold reasoning that settles something false would silently drop a
+    question whose real answer would have helped.
+    """
+    rng = random.Random(4)
+    preds = everyone_engine._predicates
+    for secret in rng.sample(everyone_engine.rows, 300):
+        log = [(p.as_id(), answer_for(secret['attrs'], p))
+               for p in rng.sample(preds, 15)]
+        known = everyone_engine.knowledge(log)
+        for pred in preds:
+            value = known.value(pred)
+            assert value is None or value is pred.test(secret['attrs']), (
+                f'{secret["wca_id"]}: settled "{pred.render()}" as {value}'
+            )
+
+
 def test_the_cap_counts_real_questions_not_settled_ones(everyone_engine):
     """Regression: settled ids must never count toward MAX_QUESTIONS.
 
@@ -321,37 +342,45 @@ def test_useless_questions_end_the_search(everyone_engine):
     dozens of questions carrying ~0.0001 bits each — measurably unable to change
     the answer — and the player would sit through every one.
 
-    Played against a truthful oracle over several secrets. `pick_question`
-    samples candidates from the global RNG, so a single game's length swings by
-    a wide margin run to run; the seed pins it and the assertions look at the
-    set rather than one number.
+    Played over several secrets, against a truthful oracle and against one
+    that gets 10% of answers wrong. `pick_question` samples candidates from the
+    global RNG, so a single game's length swings by a wide margin run to run;
+    the seed pins it and the assertions look at the set rather than one number.
     """
-    random.seed(2024)
-    rng = random.Random(2024)
-    lengths = []
-    for secret in rng.sample(everyone_engine.rows, 6):
-        belief = everyone_engine.initial_belief()
-        log: list[tuple[str, str]] = []
-        for _ in range(MAX_QUESTIONS):
-            if everyone_engine.should_guess(belief, log):
-                break
-            pred = everyone_engine.pick_question(belief, log)
-            if pred is None:
-                break
-            answer = answer_for(secret['attrs'], pred)
-            log.append((pred.as_id(), answer))
-            belief = everyone_engine.update(belief, pred.as_id(), answer)
-        lengths.append(len(log))
+    def lengths_with(noise):
+        random.seed(2024)
+        rng = random.Random(2024)
+        lengths = []
+        for secret in rng.sample(everyone_engine.rows, 6):
+            belief = everyone_engine.initial_belief()
+            log: list[tuple[str, str]] = []
+            for _ in range(MAX_QUESTIONS):
+                if everyone_engine.should_guess(belief, log):
+                    break
+                pred = everyone_engine.pick_question(belief, log)
+                if pred is None:
+                    break
+                answer = answer_for(secret['attrs'], pred)
+                if rng.random() < noise:
+                    answer = 'no' if answer == 'yes' else 'yes'
+                log.append((pred.as_id(), answer))
+                belief = everyone_engine.update(belief, pred.as_id(), answer)
+            lengths.append(len(log))
+        return lengths
 
-    print(f'\n  everyone pool question counts: {lengths}')
+    lengths, noisy = lengths_with(0.0), lengths_with(0.10)
+    print(f'\n  everyone pool question counts: {lengths}, with wrong answers: {noisy}')
 
-    assert all(n <= MAX_QUESTIONS for n in lengths), (
-        f'a game ran past the {MAX_QUESTIONS}-question cap: {lengths}'
+    assert all(n <= MAX_QUESTIONS for n in lengths + noisy), (
+        f'a game ran past the {MAX_QUESTIONS}-question cap: {lengths} {noisy}'
     )
     # The raised cap has to buy something: at least one game should get past
-    # where the old 25-question limit would have cut it off.
-    assert max(lengths) > 25, (
-        f'no game exceeded 25 questions ({lengths}) — the raised cap is unused'
+    # where the old 25-question limit would have cut it off. That is now a game
+    # recovering from wrong answers. Truthful games used to get past 25 too,
+    # but only by asking questions their earlier answers had already settled;
+    # without those, the same secrets finish in 17-24.
+    assert max(noisy) > 25, (
+        f'no game exceeded 25 questions ({noisy}) — the raised cap is unused'
     )
     # And the gain floor has to do its job: most games should stop on their own
     # rather than grinding to the cap. Some secrets genuinely cannot be narrowed

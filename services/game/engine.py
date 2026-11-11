@@ -22,35 +22,9 @@ from __future__ import annotations
 import math
 import random
 
-from .attributes import (ATTRIBUTES, BY_KEY, EVENT_GROUPS, Predicate,
-                         candidate_predicates, predicate_from_id)
-
-
-def _closure(start: str, edges: dict[str, set[str]]) -> set[str]:
-    """Everything reachable from `start`, excluding itself."""
-    seen: set[str] = set()
-    stack = list(edges.get(start, ()))
-    while stack:
-        key = stack.pop()
-        if key in seen or key == start:
-            continue
-        seen.add(key)
-        stack.extend(edges.get(key, ()))
-    return seen
-
-
-# Declared boolean implications, forward and reverse. Built once: the schema is
-# fixed at import, and walking it per question would be wasted work.
-_IMPLIES: dict[str, set[str]] = {
-    a.key: set(a.implies) for a in ATTRIBUTES if a.implies
-}
-_IMPLIED_BY: dict[str, set[str]] = {}
-for _key, _targets in _IMPLIES.items():
-    for _t in _targets:
-        _IMPLIED_BY.setdefault(_t, set()).add(_key)
-
-_implies_closure = lambda key: _closure(key, _IMPLIES)        # noqa: E731
-_implied_by_closure = lambda key: _closure(key, _IMPLIED_BY)  # noqa: E731
+from .attributes import (BY_KEY, RELATIONS, Predicate, candidate_predicates,
+                         pool_relations, predicate_from_id)
+from .knowledge import ClauseIndex, Knowledge
 
 # Candidates sampled when scoring questions on a large pool. Keep the existing
 # sample size for accuracy; scoring groups their probability by attribute value
@@ -120,6 +94,7 @@ class Engine:
         self._attrs = [r['attrs'] for r in rows]
         self._predicates = candidate_predicates(rows)
         self._by_id = {p.as_id(): p for p in self._predicates}
+        self._relations = ClauseIndex(RELATIONS + tuple(pool_relations(rows)))
 
     # Predicates are evaluated on demand rather than indexed up front.
     #
@@ -209,8 +184,24 @@ class Engine:
 
     # -- logical implication ----------------------------------------------
 
+    def knowledge(self, answers: list[tuple[str, str]]) -> Knowledge:
+        """The hard record of what the log settles. See knowledge.py.
+
+        'probably' counts as a yes here. Strictly it leaves room, but re-asking
+        a weaker form of a question someone has already leaned on reads as
+        broken rather than thorough. 'dont_know' settles nothing.
+        """
+        known = Knowledge(self._relations)
+        for pred_id, answer in answers:
+            if answer == 'dont_know':
+                continue
+            pred = self._resolve(pred_id)
+            if pred is not None:
+                known.add(pred, answer in ('yes', 'probably'))
+        return known
+
     def implied(self, answers: list[tuple[str, str]]) -> set[str]:
-        """Questions whose answer the log already settles.
+        """Questions the log already answers without having asked them.
 
         Information gain alone does not catch these, because the belief update
         is soft: answering "yes, 75+ competitions" leaves ~44% of the
@@ -221,61 +212,19 @@ class Engine:
         Measured before this existed, 42% of questions on the largest pool were
         logically settled by an earlier answer — nearly all of them another
         value of a categorical the player had already pinned down ("they're
-        Swiss" followed by "are they German?").
-
-        'probably' counts as a yes here. Strictly it leaves room, but re-asking
-        a weaker form of a question someone has already leaned on reads as
-        broken rather than thorough.
+        Swiss" followed by "are they German?"). Values of the same attribute
+        were handled first. Relations between different attributes (strongest
+        event against the specialist flags, top-100 count against top-100
+        events, country against continent) came later and are declared in
+        attributes.RELATIONS. Before that, a recorded 39-question game still
+        repeated itself 17 times.
         """
-        settled: set[str] = set()
-        for pred_id, answer in answers:
-            if answer == 'dont_know':
-                continue
-            pred = self._resolve(pred_id)
-            if pred is None:
-                continue
-            settled |= self._entailed(pred, answer in ('yes', 'probably'))
-        return settled
-
-    def _entailed(self, pred: Predicate, positive: bool) -> set[str]:
-        """Every predicate id settled by one answer."""
-        out: set[str] = set()
-        attr = BY_KEY.get(pred.key)
-
-        for other_id, other in self._by_id.items():
-            if other_id == pred.as_id():
-                continue
-
-            if other.key == pred.key:
-                # A threshold weaker than one already met, or stronger than one
-                # already missed, has a known answer.
-                if pred.op == 'gte' and other.op == 'gte':
-                    if positive and other.value <= pred.value:
-                        out.add(other_id)
-                    elif not positive and other.value >= pred.value:
-                        out.add(other_id)
-                # Categorical values are mutually exclusive: pinning one down
-                # rules out every other. This is the big one.
-                elif pred.op == 'eq' and other.op == 'eq' and positive:
-                    out.add(other_id)
-                # Holding a ranking in one event settles its whole group.
-                elif pred.op == 'has' and other.op == 'has_group' and positive:
-                    if pred.value in EVENT_GROUPS.get(str(other.value), ()):
-                        out.add(other_id)
-                # Holding none in a group settles every event inside it.
-                elif pred.op == 'has_group' and other.op == 'has' and not positive:
-                    if other.value in EVENT_GROUPS.get(str(pred.value), ()):
-                        out.add(other_id)
-
-            elif pred.op == 'is' and other.op == 'is' and attr is not None:
-                # Declared boolean hierarchy, walked transitively. A yes settles
-                # everything it implies; a no settles everything that implies it.
-                chain = (_implies_closure(pred.key) if positive
-                         else _implied_by_closure(pred.key))
-                if other.key in chain:
-                    out.add(other_id)
-
-        return out
+        known = self.knowledge(answers)
+        asked = {pred_id for pred_id, _ in answers}
+        return {
+            pred_id for pred_id, pred in self._by_id.items()
+            if pred_id not in asked and known.value(pred) is not None
+        }
 
     def overlapping(self, answers: list[tuple[str, str]]) -> set[str]:
         """Alternative question types that would revisit an earlier topic.

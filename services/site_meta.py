@@ -14,6 +14,7 @@ import logging
 import ssl
 import threading
 import time
+import uuid
 from datetime import datetime
 
 import certifi
@@ -110,6 +111,34 @@ def write_meta(conn, stats: dict, export_date: str) -> None:
     )
     conn.commit()
     cur.close()
+
+
+def game_profiles_generation(export_date: str | None) -> str:
+    """A fresh generation marker for a game matrix built from `export_date`.
+
+    Web workers only compare markers for equality, so any new value makes them
+    reload. The export date in front tells the refresh job which export the
+    published matrix came from. That's how a run finds a matrix left stale by a
+    failed rebuild and rebuilds it, even when the WCA tables are already current.
+    """
+    return f'{export_date or "undated"}/{uuid.uuid4().hex}'
+
+
+def read_game_profiles_export_date(conn) -> str | None:
+    """The export the published game matrix was built from, if its marker says."""
+    cur = conn.cursor()
+    try:
+        cur.execute('SELECT `value` FROM `site_meta` WHERE `key` = %s',
+                    (GAME_PROFILES_KEY,))
+        row = cur.fetchone()
+    except pymysql.err.ProgrammingError:
+        return None  # table not created yet
+    finally:
+        cur.close()
+    # Markers published before this carried no date: a bare uuid.
+    if not row or '/' not in str(row[0]):
+        return None
+    return str(row[0]).split('/', 1)[0]
 
 
 def publish_game_profiles_generation(conn, generation: str) -> None:

@@ -49,6 +49,24 @@ def test_every_prompt_example_passes(service):
         assert service.validate_sql(sql), sql
 
 
+def test_prompt_examples_skip_past_identities_and_unranked_rows(service):
+    """Examples the model copies must not list stale nationalities.
+
+    persons keeps a row per past name/country (sub_id 2+), and a person with
+    no results for their current country has country_rank 0 — which sorts
+    ahead of rank 1 under ORDER BY country_rank ASC.
+    """
+    examples = _prompt_examples(service)
+    for sql in examples:
+        if 'JOIN persons p' in sql:
+            assert 'p.sub_id = 1' in sql, sql
+        for column in ('country_rank', 'continent_rank'):
+            if f'ORDER BY r.{column}' in sql:
+                assert f'r.{column} > 0' in sql, sql
+    assert any('ORDER BY r.country_rank' in sql for sql in examples)
+    assert any('ORDER BY r.continent_rank' in sql for sql in examples)
+
+
 @pytest.mark.parametrize('sql', [
     'SELECT 1; DROP TABLE persons',
     # MySQL runs the body of a versioned comment, and there is no word
