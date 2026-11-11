@@ -213,6 +213,15 @@ in `Attribute.implies` walked transitively in both directions. That took implied
 questions to 0% and cut the median Everyone game from 46 questions to 26, with
 accuracy unchanged.
 
+Related questions can also overlap without being logically equivalent. Debut
+year and career length cover much of the same ground, as do last competition
+year and active status. These pairs share a `question_family` in the attribute
+schema. `Engine.overlapping()` keeps the first attribute asked in each family
+and excludes the other for the rest of the game, including after "don't know".
+Useful threshold refinements within that attribute stay available. This only
+affects question selection; it does not infer answers or change candidate
+weights. Undo releases the choice when its question is removed from the log.
+
 `pick_question` takes the answer log rather than a set of asked ids so this
 cannot be bypassed — and, importantly, so the settled set is never confused with
 the question count. `should_guess` counts only questions actually put to the

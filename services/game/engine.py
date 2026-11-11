@@ -277,6 +277,29 @@ class Engine:
 
         return out
 
+    def overlapping(self, answers: list[tuple[str, str]]) -> set[str]:
+        """Alternative question types that would revisit an earlier topic.
+
+        Keep the first attribute asked in each family. It can still supply a
+        genuinely narrower threshold, but debut year and career length (or
+        last competition and active status) must not both appear in one game.
+        Even a skipped question picks the family's wording, without implying
+        an answer or changing the belief. Recomputing from the log keeps undo
+        and stateless replay working.
+        """
+        chosen: dict[str, str] = {}
+        for pred_id, _ in answers:
+            pred = self._resolve(pred_id)
+            attr = BY_KEY.get(pred.key) if pred is not None else None
+            if attr is not None and attr.question_family:
+                chosen.setdefault(attr.question_family, attr.key)
+
+        return {
+            pred_id for pred_id, pred in self._by_id.items()
+            if (family := BY_KEY[pred.key].question_family) in chosen
+            and pred.key != chosen[family]
+        }
+
     # -- question selection ------------------------------------------------
 
     def pick_question(
@@ -285,7 +308,8 @@ class Engine:
         """The best unasked predicate, by expected information gain.
 
         Takes the answer log rather than a set of asked ids, so the questions an
-        answer already settles are excluded here rather than by each caller.
+        answer already settles, and alternate forms of an earlier topic, are
+        excluded here rather than by each caller.
         Passing a pre-built set was easy to get wrong in a way that looked like
         an improvement: fold the settled ids into the same set `should_guess`
         counts and games end the moment that set passes MAX_QUESTIONS, having
@@ -301,7 +325,8 @@ class Engine:
         if len(live) <= 1:
             return None
 
-        asked = {pred_id for pred_id, _ in answers} | self.implied(answers)
+        asked = ({pred_id for pred_id, _ in answers}
+                 | self.implied(answers) | self.overlapping(answers))
 
         pool = (random.sample(live, SAMPLE_SIZE)
                 if len(live) > SAMPLE_SIZE else live)

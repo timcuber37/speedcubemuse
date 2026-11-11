@@ -103,7 +103,8 @@ def test_picks_a_maximum_gain_question_after_weighted_answers_and_skips():
                (Predicate('gender', 'eq', 'm').as_id(), 'dont_know'),
                (Predicate('has_wr', 'is', True).as_id(), 'probably_not')]
     belief = engine.replay(answers)
-    excluded = engine.implied(answers) | {p for p, _ in answers}
+    excluded = (engine.implied(answers) | engine.overlapping(answers)
+                | {p for p, _ in answers})
     scores = {pid: posterior_gain(belief, [p.test(r['attrs']) for r in engine.rows])
               for pid, p in engine._by_id.items() if pid not in excluded}
     picked = engine.pick_question(belief, answers)

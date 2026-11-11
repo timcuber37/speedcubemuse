@@ -142,6 +142,11 @@ class Attribute:
     # `has_cr_or_better` and the engine must not ask it. Applied transitively,
     # and in reverse for a "no" — see Engine.implied().
     implies: tuple[str, ...] = ()
+    # Alternative views of the same topic. Once a game asks about one attribute
+    # in a family, use that attribute for any refinements instead of switching
+    # to another phrasing. These are overlaps, not logical equivalences: career
+    # length and debut year differ for a retired cuber, for example.
+    question_family: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +190,7 @@ _ERA = [
         question='Did they start competing in {value} or later?',
         aliases=('first competition', 'started competing', 'debut', 'rookie year'),
         thresholds=(2010, 2013, 2016, 2019, 2022),
+        question_family='career_start',
     ),
     Attribute(
         key='last_year',
@@ -192,6 +198,7 @@ _ERA = [
         question='Have they competed in {value} or later?',
         aliases=('last competition', 'most recent competition', 'still competing'),
         thresholds=(2012, 2017, 2021, 2024),
+        question_family='recent_activity',
     ),
     Attribute(
         key='years_active',
@@ -199,12 +206,14 @@ _ERA = [
         question='Have they been competing for at least {value} years?',
         aliases=('years active', 'career length', 'how long competing'),
         thresholds=(5, 8, 12, 18),
+        question_family='career_start',
     ),
     Attribute(
         key='is_active',
         kind='bool',
         question='Are they still actively competing?',
         aliases=('active', 'retired', 'still competing', 'currently competing'),
+        question_family='recent_activity',
     ),
 ]
 
